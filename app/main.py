@@ -122,6 +122,8 @@ def _account_to_dict(acc):
         "username": acc["Username"],
         "signature_html": acc["SignatureHtml"] or "",
         "is_default": bool(acc["IsDefault"]),
+        "shared": bool(acc.get("CanonicalAccountID")),
+        "canonical_id": acc.get("CanonicalAccountID"),
     }
 
 
@@ -139,6 +141,23 @@ def _get_account(user, account_id):
         return acc
     finally:
         conn.close()
+
+
+def _canonical_row(acc):
+    if acc and acc.get("CanonicalAccountID"):
+        conn = get_conn()
+        try:
+            cur = conn.cursor(as_dict=True)
+            cur.execute(
+                "SELECT * FROM HUBMAIL_Accounts WHERE AccountID=%s",
+                (acc["CanonicalAccountID"],),
+            )
+            c = cur.fetchone()
+            if c:
+                return c
+        finally:
+            conn.close()
+    return acc
 
 
 def _imap_for(acc):
@@ -224,6 +243,24 @@ def create_account(payload: AccountPayload, user=Depends(get_current_user)):
         conn.commit()
         cur.execute("SELECT @@IDENTITY AS Id")
         account_id = cur.fetchone()["Id"]
+
+        cur.execute(
+            """
+            SELECT TOP 1 ISNULL(CanonicalAccountID, AccountID) AS Cid
+            FROM HUBMAIL_Accounts
+            WHERE LOWER(EmailAddress)=LOWER(%s) AND LOWER(IMAPHost)=LOWER(%s)
+              AND LOWER(Username)=LOWER(%s) AND AccountID <> %s
+            ORDER BY AccountID
+            """,
+            (payload.email, imap_host, username, account_id),
+        )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "UPDATE HUBMAIL_Accounts SET CanonicalAccountID=%s WHERE AccountID=%s",
+                (row["Cid"], account_id),
+            )
+            conn.commit()
     finally:
         conn.close()
 
@@ -279,7 +316,30 @@ def delete_account(account_id: int, user=Depends(get_current_user)):
     _get_account(user, account_id)
     conn = get_conn()
     try:
-        cur = conn.cursor()
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT AccountID FROM HUBMAIL_Accounts WHERE CanonicalAccountID=%s ORDER BY AccountID",
+            (account_id,),
+        )
+        linked = [r["AccountID"] for r in cur.fetchall()]
+        if linked:
+            promote = linked[0]
+            cur.execute("DELETE FROM HUBMAIL_Messages WHERE AccountID=%s", (promote,))
+            cur.execute("DELETE FROM HUBMAIL_SyncState WHERE AccountID=%s", (promote,))
+            cur.execute("DELETE FROM HUBMAIL_Unread WHERE AccountID=%s", (promote,))
+            for table in ("HUBMAIL_Messages", "HUBMAIL_SyncState", "HUBMAIL_Unread"):
+                cur.execute(
+                    f"UPDATE {table} SET AccountID=%s WHERE AccountID=%s",
+                    (promote, account_id),
+                )
+            cur.execute(
+                "UPDATE HUBMAIL_Accounts SET CanonicalAccountID=%s WHERE CanonicalAccountID=%s AND AccountID<>%s",
+                (promote, account_id, promote),
+            )
+            cur.execute(
+                "UPDATE HUBMAIL_Accounts SET CanonicalAccountID=NULL WHERE AccountID=%s",
+                (promote,),
+            )
         cur.execute(
             "DELETE FROM HUBMAIL_Accounts WHERE AccountID=%s AND UserID=%s",
             (account_id, user["id"]),
@@ -292,7 +352,7 @@ def delete_account(account_id: int, user=Depends(get_current_user)):
 
 @app.post("/api/accounts/{account_id}/test")
 def test_account(account_id: int, user=Depends(get_current_user)):
-    acc = _get_account(user, account_id)
+    acc = _canonical_row(_get_account(user, account_id))
     try:
         with _imap_for(acc) as imap:
             imap.list_folders()
@@ -304,7 +364,7 @@ def test_account(account_id: int, user=Depends(get_current_user)):
 # ---------------------------------------------------------------- correo
 @app.get("/api/accounts/{account_id}/folders")
 def list_folders(account_id: int, user=Depends(get_current_user)):
-    acc = _get_account(user, account_id)
+    acc = _canonical_row(_get_account(user, account_id))
     try:
         with _imap_for(acc) as imap:
             return imap.list_folders()
@@ -352,7 +412,8 @@ def list_messages(
     q: str = Query(default=""),
     unread_only: bool = Query(default=False),
 ):
-    acc = _get_account(user, account_id)
+    acc = _canonical_row(_get_account(user, account_id))
+    account_id = acc["AccountID"]
     sync_error = None
     try:
         syncmod.sync_folder(account_id, folder, with_bodies=False)
@@ -418,7 +479,8 @@ def get_message(
     user=Depends(get_current_user),
     folder: str = Query(default="INBOX"),
 ):
-    acc = _get_account(user, account_id)
+    acc = _canonical_row(_get_account(user, account_id))
+    account_id = acc["AccountID"]
     conn = get_conn()
     try:
         cur = conn.cursor(as_dict=True)
@@ -463,7 +525,8 @@ def message_action(
     action: str = Query(default="read"),
     dest: str = Query(default=""),
 ):
-    acc = _get_account(user, account_id)
+    acc = _canonical_row(_get_account(user, account_id))
+    account_id = acc["AccountID"]
     uid = int(msgid)
     try:
         with _imap_for(acc) as imap:
@@ -519,7 +582,7 @@ def _db_move_message(account_id, folder, uid, dest):
 
 @app.get("/api/accounts/{account_id}/unread")
 def unread_count(account_id: int, user=Depends(get_current_user)):
-    acc = _get_account(user, account_id)
+    acc = _canonical_row(_get_account(user, account_id))
     try:
         with _imap_for(acc) as imap:
             return {"unread": imap.unread_count("INBOX")}
@@ -529,7 +592,8 @@ def unread_count(account_id: int, user=Depends(get_current_user)):
 
 @app.post("/api/accounts/{account_id}/messages/bulk-delete")
 def bulk_delete(account_id: int, payload: BulkDeletePayload, user=Depends(get_current_user)):
-    acc = _get_account(user, account_id)
+    acc = _canonical_row(_get_account(user, account_id))
+    account_id = acc["AccountID"]
     if not payload.ids:
         raise HTTPException(400, "No hay mensajes seleccionados")
     try:
@@ -543,7 +607,7 @@ def bulk_delete(account_id: int, payload: BulkDeletePayload, user=Depends(get_cu
 
 @app.post("/api/accounts/{account_id}/send")
 def send_message(account_id: int, payload: SendPayload, user=Depends(get_current_user)):
-    acc = _get_account(user, account_id)
+    acc = _canonical_row(_get_account(user, account_id))
     try:
         send_mail(
             acc,
@@ -567,10 +631,12 @@ def notifications(user=Depends(get_current_user)):
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            """SELECT a.*,
+            """SELECT a.*, ISNULL(a.CanonicalAccountID, a.AccountID) AS EffAccountID,
                       (SELECT COUNT(*) FROM HUBMAIL_Messages m
-                       WHERE m.AccountID=a.AccountID AND m.Folder='INBOX' AND m.Seen=0) AS Unread,
-                      (SELECT COUNT(*) FROM HUBMAIL_Messages m WHERE m.AccountID=a.AccountID) AS Synced
+                       WHERE m.AccountID=ISNULL(a.CanonicalAccountID, a.AccountID)
+                         AND m.Folder='INBOX' AND m.Seen=0) AS Unread,
+                      (SELECT COUNT(*) FROM HUBMAIL_Messages m
+                       WHERE m.AccountID=ISNULL(a.CanonicalAccountID, a.AccountID)) AS Synced
                FROM HUBMAIL_Accounts a WHERE a.UserID=%s""",
             (user["id"],),
         )
@@ -583,7 +649,7 @@ def notifications(user=Depends(get_current_user)):
         n = acc["Unread"]
         if not acc["Synced"]:
             try:
-                with _imap_for(acc) as imap:
+                with _imap_for(_canonical_row(acc)) as imap:
                     n = imap.unread_count("INBOX")
             except Exception:
                 n = None

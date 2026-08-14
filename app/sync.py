@@ -124,6 +124,24 @@ def _get_account_row(account_id):
         conn.close()
 
 
+def canonical_account_id(account_id):
+    row = _get_account_row(account_id)
+    if row and row.get("CanonicalAccountID"):
+        return int(row["CanonicalAccountID"])
+    return account_id
+
+
+def canonical_account_row(account_id):
+    row = _get_account_row(account_id)
+    if row and row.get("CanonicalAccountID"):
+        cid = int(row["CanonicalAccountID"])
+        if cid != account_id:
+            crow = _get_account_row(cid)
+            if crow:
+                return crow
+    return row
+
+
 def _load_existing(account_id, folder):
     conn = get_conn()
     try:
@@ -443,6 +461,7 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
 
 
 def sync_folder(account_id, folder, force=False, with_bodies=True):
+    account_id = canonical_account_id(account_id)
     if _account_in_use(account_id):
         total = _folder_db_count(account_id, folder)
         return {"new": 0, "updated": 0, "total": total, "throttled": True}
@@ -464,6 +483,7 @@ def sync_folder(account_id, folder, force=False, with_bodies=True):
 
 
 def sync_account(account_id):
+    account_id = canonical_account_id(account_id)
     acc = _get_account_row(account_id)
     if not acc:
         return None
@@ -500,7 +520,7 @@ def sync_all_accounts():
     conn = get_conn()
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute("SELECT AccountID FROM HUBMAIL_Accounts")
+        cur.execute("SELECT AccountID FROM HUBMAIL_Accounts WHERE CanonicalAccountID IS NULL")
         ids = [r["AccountID"] for r in cur.fetchall()]
     finally:
         conn.close()

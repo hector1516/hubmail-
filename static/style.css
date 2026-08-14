@@ -161,6 +161,17 @@ aside {
 .account-head:hover { background: #e5ebf4; }
 .account-head.current { border-color: var(--primary); background: #e8f1fb; }
 .account-head small { font-weight: 400; color: var(--muted); }
+.shared-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 15px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--primary);
+  vertical-align: 1px;
+}
 .folders { list-style: none; margin-top: 4px; }
 .sec-title {
   padding: 10px 12px 2px;

@@ -300,7 +300,7 @@ function renderSidebar() {
     return `
       <div class="account-block" data-acc="${acc.id}">
         <div class="account-head ${isCurrent ? "current" : ""}" data-acc="${acc.id}" title="Cuentas y firma">
-          <div>${esc(acc.display_name || acc.email)}<br><small>${esc(acc.email)}${fa.folders.length ? ` · ${fa.folders.length} carpetas` : ""}</small></div>
+          <div>${esc(acc.display_name || acc.email)}<br><small>${esc(acc.email)}${fa.folders.length ? ` · ${fa.folders.length} carpetas` : ""}${acc.shared ? " · <span class=\"shared-badge\">Compartida</span>" : ""}</small></div>
         </div>
         ${show ? `<div class="sec-title">Carpetas</div><ul class="folders" data-acc="${acc.id}">${show}</ul>` : ""}
       </div>`;
