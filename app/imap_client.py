@@ -76,9 +76,11 @@ def _parse_folder_line(line):
         flags = rest[1:end].split()
         rest = rest[end + 1:].strip()
     parts = rest.split(" ", 1)
+    delim_raw = parts[0].strip('"') if parts else ""
+    delimiter = delim_raw if delim_raw and delim_raw != "NIL" else ""
     name = parts[1] if len(parts) > 1 else parts[0]
     name = name.strip().strip('"').replace('\\"', '"')
-    return flags, name
+    return flags, delimiter, name
 
 
 class IMAPClient:
@@ -122,14 +124,17 @@ class IMAPClient:
             if typ != "OK":
                 raise IMAPError("Error al listar carpetas")
             folders = []
+            delimiter = ""
             for line in data:
                 try:
                     s = line.decode("utf-8", "replace")
                 except Exception:
                     s = line.decode("latin-1", "replace")
-                flags, name = _parse_folder_line(s)
+                flags, sep, name = _parse_folder_line(s)
+                if not delimiter and sep:
+                    delimiter = sep
                 folders.append({"name": _utf7_decode(name), "flags": flags})
-            return folders
+            return {"delimiter": delimiter, "folders": folders}
         finally:
             self.close()
 

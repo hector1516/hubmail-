@@ -124,7 +124,16 @@ aside {
   display: flex;
   justify-content: space-between;
   color: var(--text);
+  list-style: none;
 }
+.folders .folders { margin-top: 0; }
+.folders li .caret {
+  display: inline-block;
+  width: 16px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.folders li.fnode span[data-folder] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .folders li:hover { background: #f0f3f8; }
 .folders li.active { background: var(--primary); color: #fff; }
 .folders li .unread-count { color: var(--danger); font-weight: 700; font-size: 11px; }
@@ -215,6 +224,7 @@ main { flex: 1; display: flex; overflow: hidden; }
   padding: 20px;
   box-shadow: 0 20px 50px rgba(0,0,0,.3);
 }
+.modal-wide { width: min(960px, 94vw); }
 .modal h2 { font-size: 18px; margin-bottom: 14px; color: var(--primary); }
 .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -232,7 +242,7 @@ main { flex: 1; display: flex; overflow: hidden; }
 .compose-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
 .compose-row label { width: 46px; color: var(--muted); font-size: 12px; }
 .compose-row input { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 14px; }
-#compose-body { width: 100%; min-height: 180px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; font-family: inherit; font-size: 14px; }
+#compose-body { width: 100%; min-height: 420px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; font-family: inherit; font-size: 14px; }
 .attach-list { margin-top: 8px; }
 .attach-chip { display: inline-flex; align-items: center; gap: 6px; background: #eef2f8; border-radius: 7px; padding: 5px 9px; margin: 3px; font-size: 12px; }
 

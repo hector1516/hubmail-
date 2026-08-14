@@ -4,6 +4,8 @@ const state = {
   accounts: [],
   currentAccountId: null,
   folders: [],
+  folderDelimiter: "",
+  expandedFolders: {},
   currentFolder: "INBOX",
   messages: [],
   total: 0,
@@ -44,8 +46,8 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function openModal(html) {
-  modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal">${html}</div></div>`;
+function openModal(html, extraClass = "") {
+  modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal ${extraClass}">${html}</div></div>`;
   modalRoot.querySelector(".modal-backdrop").addEventListener("click", e => {
     if (e.target === e.currentTarget) closeModal();
   });
@@ -119,7 +121,9 @@ async function loadAccounts() {
 
 async function loadFolders() {
   if (!state.currentAccountId) return;
-  state.folders = await api(`/accounts/${state.currentAccountId}/folders`);
+  const res = await api(`/accounts/${state.currentAccountId}/folders`);
+  state.folders = res.folders || [];
+  state.folderDelimiter = res.delimiter || "";
 }
 
 async function loadMessages() {
@@ -164,21 +168,58 @@ function renderShell() {
   renderContent();
 }
 
+function buildFolderTree(folders, delimiter) {
+  const root = { children: {} };
+  folders.forEach(f => {
+    const parts = delimiter ? f.name.split(delimiter) : [f.name];
+    let node = root;
+    let full = "";
+    parts.forEach(p => {
+      full = full ? full + delimiter + p : p;
+      if (!node.children[p]) node.children[p] = { name: p, full, children: {} };
+      node = node.children[p];
+    });
+  });
+  return root;
+}
+
+function renderFolderTree(node, depth) {
+  let html = "";
+  const names = Object.keys(node.children).sort((a, b) =>
+    node.children[a].name.toLowerCase().localeCompare(node.children[b].name.toLowerCase()));
+  for (const n of names) {
+    const child = node.children[n];
+    const hasKids = Object.keys(child.children).length > 0;
+    const isActive = state.currentFolder === child.full;
+    const pad = 14 + depth * 16;
+    if (!hasKids) {
+      html += `<li class="fitem ${isActive ? "active" : ""}" data-folder="${esc(child.full)}" style="padding-left:${pad}px">${esc(child.name)}</li>`;
+    } else {
+      const open = !!state.expandedFolders[child.full];
+      html += `<li class="fitem fnode" style="padding-left:${pad - 6}px">
+        <span class="caret" data-caret="${esc(child.full)}">${open ? "▾" : "▸"}</span>
+        <span data-folder="${esc(child.full)}">${esc(child.name)}</span>
+      </li>`;
+      if (open) {
+        html += `<ul class="folders">${renderFolderTree(child, depth + 1)}</ul>`;
+      }
+    }
+  }
+  return html;
+}
+
 function renderSidebar() {
   const sb = document.getElementById("sidebar");
+  const tree = buildFolderTree(state.folders, state.folderDelimiter);
+  const accFolders = state.currentAccountId ? renderFolderTree(tree, 0) : "";
   const list = state.accounts.map(acc => {
-    const accFolders = state.currentAccountId === acc.id
-      ? state.folders.map(f => {
-          const isInbox = f.name.toUpperCase() === "INBOX";
-          return `<li class="${f.name === state.currentFolder ? "active" : ""}" data-folder="${esc(f.name)}">${esc(f.name)}</li>`;
-        }).join("")
-      : "";
+    const show = state.currentAccountId === acc.id ? accFolders : "";
     return `
       <div class="account-block">
         <div class="account-head" data-acc="${acc.id}" title="Cuentas y firma">
           <div>${esc(acc.display_name || acc.email)}<br><small>${esc(acc.email)}</small></div>
         </div>
-        <ul class="folders">${accFolders}</ul>
+        <ul class="folders">${show}</ul>
       </div>`;
   }).join("");
 
@@ -208,13 +249,23 @@ function renderSidebar() {
       }
     };
   });
-  sb.querySelectorAll(".folders li").forEach(el => {
-    el.onclick = () => {
+  sb.querySelectorAll('[data-folder]').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation();
       state.currentFolder = el.dataset.folder;
       state.page = 1;
       state.q = "";
       state.unreadOnly = false;
       loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
+    };
+  });
+  sb.querySelectorAll('[data-caret]').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const key = el.dataset.caret;
+      if (state.expandedFolders[key]) delete state.expandedFolders[key];
+      else state.expandedFolders[key] = true;
+      renderSidebar();
     };
   });
 }
@@ -397,7 +448,7 @@ function openCompose(prefill = {}) {
       <span class="spacer"></span>
       <button class="btn-ghost btn" id="c-cancel">Cancelar</button>
       <button class="btn-primary btn" id="c-send">Enviar</button>
-    </div>`);
+    </div>`, "modal-wide");
 
   document.getElementById("c-cancel").onclick = closeModal;
   document.getElementById("c-send").onclick = () => sendMessage();
