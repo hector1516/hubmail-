@@ -6,9 +6,12 @@ const state = {
   folders: [],
   folderDelimiter: "",
   expandedFolders: {},
+  foldersByAccount: {},
+  expandedByAccount: {},
   currentFolder: "INBOX",
   messages: [],
   total: 0,
+  lastSync: null,
   page: 1,
   q: "",
   unreadOnly: false,
@@ -20,6 +23,23 @@ const state = {
 const app = document.getElementById("app");
 const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
+
+function showLoading(text = "Cargando…") {
+  const o = document.getElementById("loading-overlay");
+  const t = document.getElementById("loading-text");
+  if (t) t.textContent = text;
+  if (o) o.classList.remove("hidden");
+}
+
+function hideLoading() {
+  const o = document.getElementById("loading-overlay");
+  if (o) o.classList.add("hidden");
+}
+
+function hideSplash() {
+  const s = document.getElementById("splash");
+  if (s) s.style.display = "none";
+}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c =>
@@ -74,6 +94,7 @@ function renderLogin() {
     const email = document.getElementById("lg-email").value.trim();
     const password = document.getElementById("lg-pass").value;
     if (!email || !password) return toast("Ingresa correo y contraseña", "error");
+    showLoading("Iniciando sesión…");
     try {
       const data = await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
       state.token = data.token;
@@ -82,6 +103,8 @@ function renderLogin() {
       await boot();
     } catch (e) {
       toast(e.message, "error");
+    } finally {
+      hideLoading();
     }
   };
   document.getElementById("lg-btn").onclick = doLogin;
@@ -106,7 +129,10 @@ async function boot() {
     }
     const def = state.accounts.find(a => a.is_default) || state.accounts[0];
     state.currentAccountId = def.id;
-    await loadFolders();
+    const fa = state.foldersByAccount[def.id] || { folders: [], delimiter: "/" };
+    state.folders = fa.folders;
+    state.folderDelimiter = fa.delimiter;
+    state.expandedFolders = state.expandedByAccount[def.id] || {};
     state.currentFolder = "INBOX";
     await loadMessages();
     renderShell();
@@ -117,7 +143,31 @@ async function boot() {
 }
 
 async function loadAccounts() {
-  state.accounts = await api("/accounts");
+  showLoading("Cargando cuentas y carpetas…");
+  try {
+    state.accounts = await api("/accounts");
+    state.foldersByAccount = {};
+    state.expandedByAccount = {};
+    await Promise.all(state.accounts.map(async acc => {
+      try {
+        const res = await api(`/accounts/${acc.id}/folders`);
+        const folders = res.folders || [];
+        const delimiter = res.delimiter || "/";
+        state.foldersByAccount[acc.id] = { folders, delimiter };
+        state.expandedByAccount[acc.id] = autoExpand(folders, delimiter);
+        if (state.currentAccountId === acc.id) {
+          state.folders = folders;
+          state.folderDelimiter = delimiter;
+          state.expandedFolders = state.expandedByAccount[acc.id];
+        }
+      } catch (e) {
+        state.foldersByAccount[acc.id] = { folders: [], delimiter: "/" };
+        state.expandedByAccount[acc.id] = {};
+      }
+    }));
+  } finally {
+    hideLoading();
+  }
 }
 
 async function loadFolders() {
@@ -125,15 +175,40 @@ async function loadFolders() {
   const res = await api(`/accounts/${state.currentAccountId}/folders`);
   state.folders = res.folders || [];
   state.folderDelimiter = res.delimiter || "";
+  state.foldersByAccount[state.currentAccountId] = { folders: state.folders, delimiter: state.folderDelimiter };
+  state.expandedFolders = autoExpand(state.folders, state.folderDelimiter);
+  state.expandedByAccount[state.currentAccountId] = state.expandedFolders;
+}
+
+function autoExpand(folders, delimiter) {
+  const expanded = {};
+  const tree = buildFolderTree(folders, delimiter);
+  const walk = node => {
+    Object.keys(node.children).forEach(k => {
+      const child = node.children[k];
+      if (Object.keys(child.children).length) {
+        expanded[child.full] = true;
+        walk(child);
+      }
+    });
+  };
+  walk(tree);
+  return expanded;
 }
 
 async function loadMessages() {
   if (!state.currentAccountId) return;
-  state.selected.clear();
-  const qs = `?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`;
-  const data = await api(`/accounts/${state.currentAccountId}/messages${qs}`);
-  state.messages = data.messages;
-  state.total = data.total;
+  showLoading("Cargando correos…");
+  try {
+    state.selected.clear();
+    const qs = `?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`;
+    const data = await api(`/accounts/${state.currentAccountId}/messages${qs}`);
+    state.messages = data.messages;
+    state.total = data.total;
+    state.lastSync = data.last_sync || null;
+  } finally {
+    hideLoading();
+  }
 }
 
 function renderShell() {
@@ -186,25 +261,28 @@ function buildFolderTree(folders, delimiter) {
   return root;
 }
 
-function renderFolderTree(node, depth) {
+function renderFolderTree(node, depth, expanded, accId) {
   let html = "";
   const names = Object.keys(node.children).sort((a, b) =>
     node.children[a].name.toLowerCase().localeCompare(node.children[b].name.toLowerCase()));
   for (const n of names) {
     const child = node.children[n];
     const hasKids = Object.keys(child.children).length > 0;
-    const isActive = state.currentFolder === child.full;
+    const isActive = state.currentAccountId === accId && state.currentFolder === child.full;
     const pad = 14 + depth * 16;
+    const up = child.full.toUpperCase();
+    const icon = hasKids ? (expanded[child.full] ? "📂" : "📁") : (up === "INBOX" ? "📥" : "📄");
     if (!hasKids) {
-      html += `<li class="fitem ${isActive ? "active" : ""}" data-folder="${esc(child.full)}" style="padding-left:${pad}px">${esc(child.name)}</li>`;
+      html += `<li class="fitem ${isActive ? "active" : ""}" data-folder="${esc(child.full)}" style="padding-left:${pad}px"><span class="fi-ico">${icon}</span><span class="fi-name">${esc(child.name)}</span></li>`;
     } else {
-      const open = !!state.expandedFolders[child.full];
-      html += `<li class="fitem fnode" style="padding-left:${pad - 6}px">
+      const open = !!expanded[child.full];
+      html += `<li class="fitem fnode ${isActive ? "active" : ""}" style="padding-left:${pad - 6}px">
         <span class="caret" data-caret="${esc(child.full)}">${open ? "▾" : "▸"}</span>
+        <span class="fi-ico">${icon}</span>
         <span data-folder="${esc(child.full)}">${esc(child.name)}</span>
       </li>`;
       if (open) {
-        html += `<ul class="folders">${renderFolderTree(child, depth + 1)}</ul>`;
+        html += `<ul class="folders">${renderFolderTree(child, depth + 1, expanded, accId)}</ul>`;
       }
     }
   }
@@ -213,16 +291,18 @@ function renderFolderTree(node, depth) {
 
 function renderSidebar() {
   const sb = document.getElementById("sidebar");
-  const tree = buildFolderTree(state.folders, state.folderDelimiter);
-  const accFolders = state.currentAccountId ? renderFolderTree(tree, 0) : "";
   const list = state.accounts.map(acc => {
-    const show = state.currentAccountId === acc.id ? accFolders : "";
+    const fa = state.foldersByAccount[acc.id] || { folders: [], delimiter: "/" };
+    const expanded = state.expandedByAccount[acc.id] || {};
+    const tree = buildFolderTree(fa.folders, fa.delimiter);
+    const show = renderFolderTree(tree, 0, expanded, acc.id);
+    const isCurrent = state.currentAccountId === acc.id;
     return `
-      <div class="account-block">
-        <div class="account-head" data-acc="${acc.id}" title="Cuentas y firma">
-          <div>${esc(acc.display_name || acc.email)}<br><small>${esc(acc.email)}</small></div>
+      <div class="account-block" data-acc="${acc.id}">
+        <div class="account-head ${isCurrent ? "current" : ""}" data-acc="${acc.id}" title="Cuentas y firma">
+          <div>${esc(acc.display_name || acc.email)}<br><small>${esc(acc.email)}${fa.folders.length ? ` · ${fa.folders.length} carpetas` : ""}</small></div>
         </div>
-        <ul class="folders">${show}</ul>
+        ${show ? `<div class="sec-title">Carpetas</div><ul class="folders" data-acc="${acc.id}">${show}</ul>` : ""}
       </div>`;
   }).join("");
 
@@ -239,7 +319,7 @@ function renderSidebar() {
   document.getElementById("sb-accounts").onclick = () => { sb.classList.remove("open"); openAccountsModal(); };
 
   sb.querySelectorAll(".account-head").forEach(el => {
-    el.onclick = () => {
+    el.onclick = async () => {
       const id = parseInt(el.dataset.acc);
       if (id !== state.currentAccountId) {
         state.currentAccountId = id;
@@ -247,30 +327,50 @@ function renderSidebar() {
         state.page = 1;
         state.q = "";
         state.unreadOnly = false;
-        loadFolders()
-          .then(() => loadMessages())
-          .then(renderContent)
-          .catch(e => toast(e.message, "error"));
+        const fa = state.foldersByAccount[id] || { folders: [], delimiter: "/" };
+        state.folders = fa.folders;
+        state.folderDelimiter = fa.delimiter;
+        state.expandedFolders = state.expandedByAccount[id] || {};
+        try {
+          await loadMessages();
+          renderSidebar();
+          renderContent();
+        } catch (e) { toast(e.message, "error"); }
       }
     };
   });
   sb.querySelectorAll('[data-folder]').forEach(el => {
-    el.onclick = (e) => {
+    el.onclick = async (e) => {
       e.stopPropagation();
+      const accId = parseInt(el.closest("[data-acc]").dataset.acc);
+      if (accId !== state.currentAccountId) {
+        state.currentAccountId = accId;
+        const fa = state.foldersByAccount[accId] || { folders: [], delimiter: "/" };
+        state.folders = fa.folders;
+        state.folderDelimiter = fa.delimiter;
+        state.expandedFolders = state.expandedByAccount[accId] || {};
+      }
       state.currentFolder = el.dataset.folder;
       state.page = 1;
       state.q = "";
       state.unreadOnly = false;
       sb.classList.remove("open");
-      loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
+      try {
+        await loadMessages();
+        renderSidebar();
+        renderContent();
+      } catch (e) { toast(e.message, "error"); }
     };
   });
   sb.querySelectorAll('[data-caret]').forEach(el => {
     el.onclick = (e) => {
       e.stopPropagation();
+      const accId = parseInt(el.closest("[data-acc]").dataset.acc);
+      const ex = state.expandedByAccount[accId] || (state.expandedByAccount[accId] = {});
       const key = el.dataset.caret;
-      if (state.expandedFolders[key]) delete state.expandedFolders[key];
-      else state.expandedFolders[key] = true;
+      if (ex[key]) delete ex[key];
+      else ex[key] = true;
+      if (accId === state.currentAccountId) state.expandedFolders = ex;
       renderSidebar();
     };
   });
@@ -305,6 +405,7 @@ function renderContent() {
     <div id="list-pane">
       <div class="list-toolbar">
         <div class="folder-title">${esc(state.currentFolder)} ${state.unreadOnly ? "(no leídos)" : ""}</div>
+        <div class="last-update">${state.lastSync ? "Actualizado " + esc(state.lastSync) : "Sin sincronizar"}</div>
         <input id="search-box" placeholder="Buscar..." value="${esc(state.q)}">
         <button class="btn-ghost btn btn-sm" id="btn-refresh">⟳</button>
         <button class="btn-ghost btn btn-sm" id="btn-unread">${state.unreadOnly ? "Todo" : "No leídos"}</button>
@@ -370,6 +471,7 @@ function renderContent() {
     const n = state.selected.size;
     if (!n) return;
     if (!confirm(`¿Eliminar ${n} mensaje(s) definitivamente? Esta acción no se puede deshacer.`)) return;
+    showLoading("Eliminando mensajes…");
     try {
       await api(`/accounts/${state.currentAccountId}/messages/bulk-delete`, {
         method: "POST",
@@ -381,6 +483,8 @@ function renderContent() {
       toast(`${n} mensaje(s) eliminado(s)`, "ok");
     } catch (e) {
       toast(e.message, "error");
+    } finally {
+      hideLoading();
     }
   };
   updateBulkBar();
@@ -404,6 +508,7 @@ function updateBulkBar() {
 
 async function openMessage(id) {
   state.currentMsgId = id;
+  showLoading("Cargando mensaje…");
   try {
     const m = await loadMessageDetail(id);
     renderDetail(m);
@@ -414,6 +519,8 @@ async function openMessage(id) {
     }
   } catch (e) {
     toast(e.message, "error");
+  } finally {
+    hideLoading();
   }
 }
 
@@ -555,6 +662,7 @@ async function sendMessage() {
   const btn = document.getElementById("c-send");
   btn.disabled = true;
   btn.textContent = "Enviando...";
+  showLoading("Enviando correo…");
   try {
     await api(`/accounts/${accountId}/send`, {
       method: "POST",
@@ -566,6 +674,8 @@ async function sendMessage() {
     toast(e.message, "error");
     btn.disabled = false;
     btn.textContent = "Enviar";
+  } finally {
+    hideLoading();
   }
 }
 
@@ -581,11 +691,14 @@ function useContact(email) {
 
 async function openContactsManager(pickMode = false) {
   let data;
+  showLoading("Cargando contactos…");
   try {
     data = await api("/contacts");
   } catch (e) {
+    hideLoading();
     return toast(e.message, "error");
   }
+  hideLoading();
   const usersHtml = data.users.map(u =>
     `<div class="contact-item">
       <div><b>${esc(u.name)}</b><div class="c-email">${esc(u.email)}</div></div>
@@ -770,12 +883,17 @@ function startNotifications() {
 (async function init() {
   if (!state.token) {
     renderLogin();
+    hideSplash();
     return;
   }
+  showLoading("Cargando HUBMail…");
   try {
     state.user = await api("/auth/me");
     await boot();
   } catch (e) {
     renderLogin();
+  } finally {
+    hideLoading();
+    hideSplash();
   }
 })();

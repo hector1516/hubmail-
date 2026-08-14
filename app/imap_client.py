@@ -3,6 +3,7 @@ import email
 import email.utils
 import imaplib
 import base64
+import re
 from datetime import datetime, timezone
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
@@ -13,11 +14,24 @@ class IMAPError(Exception):
     pass
 
 
+_UID_RE = re.compile(r"UID\s+(\d+)")
+_FLAGS_RE = re.compile(r"FLAGS\s*\((.*?)\)")
+
+
+def _extract_uid(meta):
+    m = _UID_RE.search(meta)
+    return int(m.group(1)) if m else None
+
+
 def _utf7_encode(name: str) -> str:
     try:
         return codecs.encode(name, "imap4-utf-7")
     except Exception:
         return name
+
+
+def _q(name: str) -> str:
+    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _utf7_decode(name: str) -> str:
@@ -95,8 +109,10 @@ class IMAPClient:
         self._conn = None
 
     def _connect(self):
+        if self._conn is not None:
+            return self._conn
         try:
-            conn = imaplib.IMAP4_SSL(self.host, self.port, timeout=45)
+            conn = imaplib.IMAP4_SSL(self.host, self.port, timeout=20)
         except Exception as e:
             raise IMAPError(f"No se pudo conectar a IMAP ({self.host}): {e}")
         try:
@@ -105,6 +121,9 @@ class IMAPClient:
             raise IMAPError("Credenciales IMAP incorrectas o cuenta bloqueada")
         self._conn = conn
         return conn
+
+    def connect(self):
+        return self._connect()
 
     def close(self):
         if self._conn:
@@ -122,33 +141,30 @@ class IMAPClient:
 
     def list_folders(self):
         conn = self._connect()
-        try:
-            typ, data = conn.list()
-            if typ != "OK":
-                raise IMAPError("Error al listar carpetas")
-            folders = []
-            delimiter = ""
-            for line in data:
-                try:
-                    s = line.decode("utf-8", "replace")
-                except Exception:
-                    s = line.decode("latin-1", "replace")
-                flags, sep, name = _parse_folder_line(s)
-                if not delimiter and sep:
-                    delimiter = sep
-                folders.append({"name": _utf7_decode(name), "flags": flags})
-            return {"delimiter": delimiter, "folders": folders}
-        finally:
-            self.close()
+        typ, data = conn.list()
+        if typ != "OK":
+            raise IMAPError("Error al listar carpetas")
+        folders = []
+        delimiter = ""
+        for line in data:
+            try:
+                s = line.decode("utf-8", "replace")
+            except Exception:
+                s = line.decode("latin-1", "replace")
+            flags, sep, name = _parse_folder_line(s)
+            if not delimiter and sep:
+                delimiter = sep
+            folders.append({"name": _utf7_decode(name), "flags": flags})
+        return {"delimiter": delimiter, "folders": folders}
 
     def list_messages(self, folder="INBOX", criteria="ALL", page=1, page_size=25, unread_only=False):
         conn = self._connect()
         try:
-            typ, _ = conn.select(_utf7_encode(folder), readonly=True)
+            typ, _ = conn.select(_q(_utf7_encode(folder)), readonly=True)
             if typ != "OK":
                 raise IMAPError(f"No se pudo abrir la carpeta {folder}")
             search_criteria = "UNSEEN" if unread_only else criteria
-            typ, data = conn.search(None, search_criteria)
+            typ, data = conn.uid("search", None, search_criteria)
             if typ != "OK":
                 raise IMAPError("Error en la búsqueda")
             ids = data[0].split()
@@ -158,42 +174,45 @@ class IMAPClient:
             chunk = ids[start:start + page_size]
             messages = []
             for mid in chunk:
-                typ, d = conn.fetch(mid, "(FLAGS RFC822.HEADER)")
+                typ, d = conn.uid("fetch", mid, "(UID FLAGS RFC822.HEADER)")
                 if typ != "OK" or not d or not isinstance(d[0], tuple):
                     continue
-                flags, raw = d[0][0].decode("utf-8", "replace"), d[0][1]
-                messages.append(self._parse_header(raw, mid.decode(), flags))
+                meta, raw = d[0][0].decode("utf-8", "replace"), d[0][1]
+                messages.append(self._parse_header(raw, meta))
             return {"total": total, "page": page, "page_size": page_size, "messages": messages}
         finally:
             self.close()
 
-    def _parse_header(self, raw, msgid, flags):
+    def _parse_header(self, raw, meta):
         msg = email.message_from_bytes(raw)
+        uid = _extract_uid(meta) or meta
+        flags = _FLAGS_RE.search(meta)
+        flags = flags.group(1).split() if flags else []
         return {
-            "id": msgid,
+            "id": str(uid),
             "subject": _decode_mime(msg.get("Subject")) or "(sin asunto)",
             "from": _parse_addresses(msg.get("From")),
             "to": _parse_addresses(msg.get("To")),
             "date": _fmt_date(msg.get("Date")),
-            "unread": b"\\Seen" not in flags.encode(),
-            "flagged": b"\\Flagged" in flags.encode(),
+            "unread": "\\Seen" not in flags,
+            "flagged": "\\Flagged" in flags,
             "has_attachments": "multipart/mixed" in (msg.get_content_type() or ""),
         }
 
     def get_message(self, folder, msgid):
         conn = self._connect()
         try:
-            conn.select(_utf7_encode(folder), readonly=True)
-            typ, d = conn.fetch(msgid, "(FLAGS RFC822)")
+            conn.select(_q(_utf7_encode(folder)), readonly=True)
+            typ, d = conn.uid("fetch", msgid, "(UID FLAGS RFC822)")
             if typ != "OK" or not d or not isinstance(d[0], tuple):
                 raise IMAPError("Mensaje no encontrado")
-            flags, raw = d[0][0].decode("utf-8", "replace"), d[0][1]
+            meta, raw = d[0][0].decode("utf-8", "replace"), d[0][1]
             msg = email.message_from_bytes(raw)
-            return self._full_message(msg, msgid, flags)
+            return self._full_message(msg, meta)
         finally:
             self.close()
 
-    def _full_message(self, msg, msgid, flags):
+    def _full_message(self, msg, meta):
         body_html = ""
         body_text = ""
         attachments = []
@@ -230,15 +249,18 @@ class IMAPClient:
                 })
         if not body_html and body_text:
             body_html = "<pre>" + escape(body_text) + "</pre>"
+        uid = _extract_uid(meta) or meta
+        flags = _FLAGS_RE.search(meta)
+        flags = flags.group(1).split() if flags else []
         return {
-            "id": msgid,
+            "id": str(uid),
             "subject": _decode_mime(msg.get("Subject")) or "(sin asunto)",
             "from": _parse_addresses(msg.get("From")),
             "to": _parse_addresses(msg.get("To")),
             "cc": _parse_addresses(msg.get("Cc")),
             "date": _fmt_date(msg.get("Date")),
-            "unread": b"\\Seen" not in flags.encode(),
-            "flagged": b"\\Flagged" in flags.encode(),
+            "unread": "\\Seen" not in flags,
+            "flagged": "\\Flagged" in flags,
             "body_html": body_html,
             "body_text": body_text,
             "attachments": attachments,
@@ -249,20 +271,20 @@ class IMAPClient:
     def set_flag(self, folder, msgid, flag, value):
         conn = self._connect()
         try:
-            conn.select(_utf7_encode(folder))
+            conn.select(_q(_utf7_encode(folder)))
             prefix = "+" if value else "-"
-            conn.store(msgid, prefix + "FLAGS", flag)
+            conn.uid("store", msgid, prefix + "FLAGS", flag)
         finally:
             self.close()
 
     def move_message(self, folder, msgid, dest):
         conn = self._connect()
         try:
-            conn.select(_utf7_encode(folder))
-            typ, _ = conn.copy(msgid, _utf7_encode(dest))
+            conn.select(_q(_utf7_encode(folder)))
+            typ, _ = conn.uid("copy", msgid, _q(_utf7_encode(dest)))
             if typ != "OK":
                 raise IMAPError("No se pudo mover a la carpeta destino")
-            conn.store(msgid, "+FLAGS", "\\Deleted")
+            conn.uid("store", msgid, "+FLAGS", "\\Deleted")
             conn.expunge()
         finally:
             self.close()
@@ -270,8 +292,8 @@ class IMAPClient:
     def delete_message(self, folder, msgid):
         conn = self._connect()
         try:
-            conn.select(_utf7_encode(folder))
-            conn.store(msgid, "+FLAGS", "\\Deleted")
+            conn.select(_q(_utf7_encode(folder)))
+            conn.uid("store", msgid, "+FLAGS", "\\Deleted")
             conn.expunge()
         finally:
             self.close()
@@ -279,9 +301,9 @@ class IMAPClient:
     def delete_messages(self, folder, ids):
         conn = self._connect()
         try:
-            conn.select(_utf7_encode(folder))
-            for mid in ids:
-                conn.store(mid, "+FLAGS", "\\Deleted")
+            conn.select(_q(_utf7_encode(folder)))
+            if ids:
+                conn.uid("store", ",".join(ids), "+FLAGS", "\\Deleted")
             conn.expunge()
         finally:
             self.close()
@@ -289,10 +311,119 @@ class IMAPClient:
     def unread_count(self, folder="INBOX"):
         conn = self._connect()
         try:
-            conn.select(_utf7_encode(folder), readonly=True)
-            typ, data = conn.search(None, "UNSEEN")
+            conn.select(_q(_utf7_encode(folder)), readonly=True)
+            typ, data = conn.uid("search", None, "UNSEEN")
             if typ != "OK":
                 return 0
             return len(data[0].split()) if data and data[0] else 0
         finally:
             self.close()
+
+    # ---------------------------------------------------------- sync helpers
+    def select_folder(self, folder, readonly=True):
+        conn = self._connect()
+        typ, _ = conn.select(_q(_utf7_encode(folder)), readonly=readonly)
+        if typ != "OK":
+            raise IMAPError(f"No se pudo abrir la carpeta {folder}")
+        return conn
+
+    def fetch_uid_list(self, folder):
+        conn = self.select_folder(folder, readonly=True)
+        typ, data = conn.uid("search", None, "ALL")
+        if typ != "OK":
+            raise IMAPError("Error en la búsqueda UID")
+        return [int(x) for x in data[0].split()] if data and data[0] else []
+
+    def fetch_flags_map(self, folder, uids=None):
+        conn = self.select_folder(folder, readonly=True)
+        result = {}
+        if uids:
+            ranges = [uids[i:i + 200] for i in range(0, len(uids), 200)]
+        else:
+            ranges = [None]
+        for part in ranges:
+            if part:
+                cmd = ",".join(str(u) for u in part)
+            else:
+                cmd = "1:*"
+            try:
+                typ, data = conn.uid("fetch", cmd, "(UID FLAGS)")
+            except Exception:
+                continue
+            if typ != "OK":
+                continue
+            for item in data:
+                if not isinstance(item, tuple):
+                    continue
+                text = item[0].decode("utf-8", "replace")
+                uid = _extract_uid(text)
+                if uid is None:
+                    continue
+                fm = _FLAGS_RE.search(text)
+                result[uid] = fm.group(1).split() if fm else []
+        return result
+
+    def fetch_full_many(self, folder, uids, chunk=50):
+        conn = self.select_folder(folder, readonly=True)
+        results = []
+        for i in range(0, len(uids), chunk):
+            part = ",".join(str(u) for u in uids[i:i + chunk])
+            typ, data = conn.uid("fetch", part, "(UID FLAGS BODY.PEEK[])")
+            if typ != "OK":
+                continue
+            for item in data:
+                if not isinstance(item, tuple):
+                    continue
+                meta = item[0].decode("utf-8", "replace")
+                uid = _extract_uid(meta)
+                if uid is None:
+                    continue
+                results.append((uid, meta, item[1]))
+        return results
+
+    def iter_full_many(self, folder, uids, chunk=25):
+        conn = self.select_folder(folder, readonly=True)
+        for i in range(0, len(uids), chunk):
+            part = ",".join(str(u) for u in uids[i:i + chunk])
+            try:
+                typ, data = conn.uid("fetch", part, "(UID FLAGS BODY.PEEK[])")
+            except Exception:
+                continue
+            if typ != "OK":
+                continue
+            out = []
+            for item in data:
+                if not isinstance(item, tuple):
+                    continue
+                meta = item[0].decode("utf-8", "replace")
+                uid = _extract_uid(meta)
+                if uid is None:
+                    continue
+                out.append((uid, meta, item[1]))
+            if out:
+                yield out
+
+    def iter_headers_many(self, folder, uids, chunk=100):
+        conn = self.select_folder(folder, readonly=True)
+        for i in range(0, len(uids), chunk):
+            part = ",".join(str(u) for u in uids[i:i + chunk])
+            try:
+                typ, data = conn.uid(
+                    "fetch", part,
+                    "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO)])",
+                )
+            except Exception:
+                continue
+            if typ != "OK":
+                continue
+            out = []
+            for item in data:
+                if not isinstance(item, tuple):
+                    continue
+                meta = item[0].decode("utf-8", "replace")
+                uid = _extract_uid(meta)
+                if uid is None:
+                    continue
+                out.append((uid, meta, item[1]))
+            if out:
+                yield out
