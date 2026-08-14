@@ -112,6 +112,7 @@ function renderLogin() {
 }
 
 function logout() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
   state.token = null;
   localStorage.removeItem("hubmail_token");
   renderLogin();
@@ -137,6 +138,7 @@ async function boot() {
     await loadMessages();
     renderShell();
     startNotifications();
+    startFolderRefresh();
   } catch (e) {
     toast(e.message, "error");
   }
@@ -209,6 +211,102 @@ async function loadMessages() {
   } finally {
     hideLoading();
   }
+}
+
+function messagesHtml() {
+  if (!state.messages.length) return `<div class="empty">Sin mensajes</div>`;
+  return state.messages.map(m => {
+    const from = m.from[0];
+    const sender = from ? (from.name || from.email) : "?";
+    const sel = state.selected.has(m.id);
+    return `
+      <div class="msg-item ${m.unread ? "unread" : ""} ${sel ? "selected" : ""}" data-id="${esc(m.id)}">
+        <input type="checkbox" class="msg-check" data-id="${esc(m.id)}" ${sel ? "checked" : ""}>
+        <div class="msg-main">
+          <div class="row1">
+            <div class="from">${esc(sender)}</div>
+            <div class="date">${esc(m.date)}</div>
+          </div>
+          <div class="subject">${m.flagged ? "★ " : ""}${esc(m.subject)}</div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function pagerHtml() {
+  const pages = Math.max(1, Math.ceil(state.total / 25));
+  return `
+    <button class="btn-ghost btn btn-sm" id="btn-prev" ${state.page <= 1 ? "disabled" : ""}>← Anterior</button>
+    <span>Página ${state.page} de ${pages} · ${state.total} mensajes</span>
+    <button class="btn-ghost btn btn-sm" id="btn-next" ${state.page >= pages ? "disabled" : ""}>Siguiente →</button>`;
+}
+
+function bindMessageList() {
+  document.querySelectorAll("#message-list .msg-item").forEach(el => {
+    const id = el.dataset.id;
+    el.onclick = () => {
+      clearTimeout(el._t);
+      el._t = setTimeout(() => openMessage(id), 220);
+    };
+    el.ondblclick = (e) => {
+      e.preventDefault();
+      if (e.target.classList.contains("msg-check")) return;
+      clearTimeout(el._t);
+      openMessageModal(id);
+    };
+  });
+  document.querySelectorAll(".msg-check").forEach(cb => {
+    cb.onclick = (e) => {
+      e.stopPropagation();
+      const id = cb.dataset.id;
+      if (cb.checked) state.selected.add(id);
+      else state.selected.delete(id);
+      cb.closest(".msg-item").classList.toggle("selected", cb.checked);
+      updateBulkBar();
+      syncSelectAll();
+    };
+  });
+}
+
+function bindPager() {
+  const prev = document.getElementById("btn-prev");
+  const next = document.getElementById("btn-next");
+  if (prev) prev.onclick = () => { if (state.page > 1) { state.page--; loadMessages().then(renderContent); } };
+  if (next) next.onclick = () => { const pages = Math.max(1, Math.ceil(state.total / 25)); if (state.page < pages) { state.page++; loadMessages().then(renderContent); } };
+}
+
+let refreshTimer = null;
+let refreshing = false;
+
+function silentRefresh() {
+  if (refreshing || document.hidden || !state.currentAccountId || !state.currentFolder) return;
+  if (modalRoot.querySelector(".modal")) return;
+  refreshing = true;
+  api(`/accounts/${state.currentAccountId}/messages?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`)
+    .then(data => {
+      state.messages = data.messages;
+      state.total = data.total;
+      state.lastSync = data.last_sync || null;
+      const list = document.getElementById("message-list");
+      if (!list) return;
+      list.innerHTML = messagesHtml();
+      bindMessageList();
+      const lu = document.querySelector(".last-update");
+      if (lu) lu.textContent = state.lastSync ? "Actualizado " + state.lastSync : "Sin sincronizar";
+      const pager = document.querySelector(".pager");
+      if (pager) { pager.innerHTML = pagerHtml(); bindPager(); }
+      const badge = document.getElementById("notif-badge");
+      if (badge) badge.textContent = state.unreadOnly ? "✓" : (state.messages.reduce((n, m) => n + (m.unread ? 1 : 0), 0) || "");
+      syncSelectAll();
+      updateBulkBar();
+    })
+    .catch(() => {})
+    .finally(() => { refreshing = false; });
+}
+
+function startFolderRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(silentRefresh, 30000);
 }
 
 function renderShell() {
@@ -382,30 +480,14 @@ function renderContent() {
   document.getElementById("notif-badge").textContent = state.unreadOnly ? "✓" : (totalUnread ? totalUnread : "");
 
   const pages = Math.max(1, Math.ceil(state.total / 25));
-  const msgs = state.messages.length
-    ? state.messages.map(m => {
-        const from = m.from[0];
-        const sender = from ? (from.name || from.email) : "?";
-        const sel = state.selected.has(m.id);
-        return `
-        <div class="msg-item ${m.unread ? "unread" : ""} ${sel ? "selected" : ""}" data-id="${esc(m.id)}">
-          <input type="checkbox" class="msg-check" data-id="${esc(m.id)}" ${sel ? "checked" : ""}>
-          <div class="msg-main">
-            <div class="row1">
-              <div class="from">${esc(sender)}</div>
-              <div class="date">${esc(m.date)}</div>
-            </div>
-            <div class="subject">${m.flagged ? "★ " : ""}${esc(m.subject)}</div>
-          </div>
-        </div>`;
-      }).join("")
-    : `<div class="empty">Sin mensajes</div>`;
+  const msgs = messagesHtml();
 
   content.innerHTML = `
     <div id="list-pane">
       <div class="list-toolbar">
         <div class="folder-title">${esc(state.currentFolder)} ${state.unreadOnly ? "(no leídos)" : ""}</div>
         <div class="last-update">${state.lastSync ? "Actualizado " + esc(state.lastSync) : "Sin sincronizar"}</div>
+        <label class="sel-all" title="Seleccionar todos"><input type="checkbox" id="sel-all"></label>
         <input id="search-box" placeholder="Buscar..." value="${esc(state.q)}">
         <button class="btn-ghost btn btn-sm" id="btn-refresh">⟳</button>
         <button class="btn-ghost btn btn-sm" id="btn-unread">${state.unreadOnly ? "Todo" : "No leídos"}</button>
@@ -434,6 +516,13 @@ function renderContent() {
       loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
     }, 500);
   };
+  const selAll = document.getElementById("sel-all");
+  selAll.onchange = () => {
+    if (selAll.checked) state.messages.forEach(m => state.selected.add(m.id));
+    else state.messages.forEach(m => state.selected.delete(m.id));
+    renderContent();
+  };
+  syncSelectAll();
   document.getElementById("btn-refresh").onclick = () => {
     Promise.all([loadMessages(), loadFolders()]).then(() => { renderContent(); renderSidebar(); }).catch(e => toast(e.message, "error"));
   };
@@ -445,19 +534,7 @@ function renderContent() {
   document.getElementById("btn-prev").onclick = () => { if (state.page > 1) { state.page--; loadMessages().then(renderContent); } };
   document.getElementById("btn-next").onclick = () => { if (state.page < pages) { state.page++; loadMessages().then(renderContent); } };
 
-  document.querySelectorAll("#message-list .msg-item").forEach(el => {
-    el.onclick = () => openMessage(el.dataset.id);
-  });
-  document.querySelectorAll(".msg-check").forEach(cb => {
-    cb.onclick = (e) => {
-      e.stopPropagation();
-      const id = cb.dataset.id;
-      if (cb.checked) state.selected.add(id);
-      else state.selected.delete(id);
-      cb.closest(".msg-item").classList.toggle("selected", cb.checked);
-      updateBulkBar();
-    };
-  });
+  bindMessageList();
   document.getElementById("btn-sel-all").onclick = () => {
     if (state.selected.size === state.messages.length) state.selected.clear();
     else state.messages.forEach(m => state.selected.add(m.id));
@@ -506,6 +583,15 @@ function updateBulkBar() {
   if (count) count.textContent = state.selected.size;
 }
 
+function syncSelectAll() {
+  const cb = document.getElementById("sel-all");
+  if (!cb) return;
+  const n = state.messages.length;
+  const sel = state.messages.filter(m => state.selected.has(m.id)).length;
+  cb.checked = n > 0 && sel === n;
+  cb.indeterminate = n > 0 && sel > 0 && sel < n;
+}
+
 async function openMessage(id) {
   state.currentMsgId = id;
   showLoading("Cargando mensaje…");
@@ -528,8 +614,7 @@ async function loadMessageDetail(id) {
   return api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(state.currentFolder)}`);
 }
 
-function renderDetail(m) {
-  const dp = document.getElementById("detail-pane");
+function detailHtml(m) {
   const from = m.from[0];
   const sender = from ? `${esc(from.name || "")} &lt;${esc(from.email)}&gt;` : "";
   const to = m.to.map(t => `<span class="chip">${esc(t.name || t.email)}</span>`).join("");
@@ -546,7 +631,7 @@ function renderDetail(m) {
     bodyHtml = bodyHtml.replace(new RegExp("cid:" + a.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), `data:${a.content_type};base64,${a.data}`);
   });
 
-  dp.innerHTML = `
+  return `
     <div class="detail-toolbar">
       <button class="btn-ghost btn btn-sm" id="d-back">←</button>
       <button class="btn-ghost btn btn-sm" id="d-reply">↩ Responder</button>
@@ -564,21 +649,36 @@ function renderDetail(m) {
       ${atts}
       <iframe class="body-frame" sandbox="" srcdoc="${esc(bodyHtml || "")}"></iframe>
     </div>`;
+}
 
+function renderDetail(m) {
+  const dp = document.getElementById("detail-pane");
+  dp.innerHTML = detailHtml(m);
   dp.classList.add("open");
-  document.getElementById("d-back").onclick = () => { state.currentMsgId = null; dp.classList.remove("open"); };
+  bindDetailActions(m);
+}
+
+function bindDetailActions(m) {
+  const isModal = !!modalRoot.querySelector(".modal");
+  const dp = document.getElementById("detail-pane");
+  document.getElementById("d-back").onclick = () => {
+    state.currentMsgId = null;
+    if (isModal) closeModal();
+    else if (dp) dp.classList.remove("open");
+  };
   document.getElementById("d-del").onclick = async () => {
     if (!confirm("¿Eliminar este mensaje?")) return;
     await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=delete`, { method: "PATCH" }).catch(e => toast(e.message, "error"));
     state.currentMsgId = null;
     await loadMessages();
     renderContent();
+    if (isModal) closeModal();
     toast("Mensaje eliminado", "ok");
   };
   document.getElementById("d-flag").onclick = async () => {
-    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=${m.flagged ? "unflag" : "flag"}`, { method: "PATCH" });
+    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=${m.flagged ? "unflag" : "flag"}`, { method: "PATCH" }).catch(() => {});
     m.flagged = !m.flagged;
-    renderDetail(m);
+    document.getElementById("d-flag").textContent = m.flagged ? "★" : "☆";
   };
   document.getElementById("d-reply").onclick = () => {
     const f = m.from[0];
@@ -587,6 +687,22 @@ function renderDetail(m) {
   document.getElementById("d-fwd").onclick = () => {
     openCompose({ subject: m.subject.startsWith("Fwd:") ? m.subject : "Fwd: " + m.subject });
   };
+}
+
+async function openMessageModal(id) {
+  const dp = document.getElementById("detail-pane");
+  if (dp) dp.classList.remove("open");
+  state.currentMsgId = null;
+  showLoading("Cargando mensaje…");
+  try {
+    const m = await loadMessageDetail(id);
+    openModal(detailHtml(m), "modal-email");
+    bindDetailActions(m);
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    hideLoading();
+  }
 }
 
 function fmtSize(n) {
@@ -810,7 +926,8 @@ function openAccountForm(accountId) {
       <div class="field"><label>SMTP puerto</label><input id="f-smtp-port" value="${esc(v("smtp_port", "465"))}"></div>
       <div class="field"><label>Usuario</label><input id="f-user" value="${esc(v("username", ""))}"></div>
       <div class="field"><label>Contraseña ${acc ? "(dejar vacío = no cambiar)" : ""}</label><input id="f-pass" type="password"></div>
-      <div class="field full"><label>Firma HTML</label><textarea id="f-sig">${esc(v("signature_html", ""))}</textarea></div>
+      <div class="field full"><label>Teléfono</label><input id="f-phone" value="${esc(v("phone", ""))}" placeholder="+52 81 0000 0000"></div>
+      <div class="field full"><label>Firma HTML ${acc ? "" : "(vacía al crear = se genera automáticamente)"}</label><textarea id="f-sig">${esc(v("signature_html", ""))}</textarea></div>
     </div>
     <div class="actions">
       <button class="btn-ghost btn" id="f-cancel">Cancelar</button>
@@ -856,6 +973,7 @@ function openAccountForm(accountId) {
       smtp_port: parseInt(document.getElementById("f-smtp-port").value) || 465,
       username: document.getElementById("f-user").value.trim(),
       password: document.getElementById("f-pass").value,
+      phone: document.getElementById("f-phone").value.trim(),
       signature_html: document.getElementById("f-sig").value,
       is_default: false,
     };

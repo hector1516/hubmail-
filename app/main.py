@@ -14,6 +14,7 @@ from .crypto import encrypt_secret, decrypt_secret
 from .db import get_conn
 from .imap_client import IMAPClient, IMAPError
 from .smtp_client import send_mail, SMTPError
+from .signature import build_default_signature
 from . import sync as syncmod
 
 app = FastAPI(title="HUBMail", version="0.1.0")
@@ -46,9 +47,35 @@ def _background_sync_loop():
             time.sleep(1)
 
 
+def _backfill_signatures():
+    try:
+        conn = get_conn()
+        try:
+            cur = conn.cursor(as_dict=True)
+            cur.execute(
+                "SELECT AccountID, DisplayName, EmailAddress, Phone "
+                "FROM HUBMAIL_Accounts WHERE ISNULL(SignatureHtml,'')=''"
+            )
+            rows = cur.fetchall()
+            for r in rows:
+                sig = build_default_signature(
+                    r["DisplayName"], r["EmailAddress"], r["Phone"] or ""
+                )
+                cur.execute(
+                    "UPDATE HUBMAIL_Accounts SET SignatureHtml=%s WHERE AccountID=%s",
+                    (sig, r["AccountID"]),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
 @app.on_event("startup")
 def _start_sync_thread():
     global _sync_thread
+    _backfill_signatures()
     if _sync_thread is None:
         _sync_thread = threading.Thread(target=_background_sync_loop, daemon=True)
         _sync_thread.start()
@@ -76,6 +103,7 @@ class AccountPayload(BaseModel):
     username: str = ""
     password: str = ""
     signature_html: str = ""
+    phone: str = ""
     is_default: bool = False
 
 
@@ -110,6 +138,10 @@ class ContactPayload(BaseModel):
 
 
 # ---------------------------------------------------------------- helpers
+def _is_auto_signature(sig):
+    return bool(sig) and "ECCSA Automation" in sig and "data:image/png;base64" in sig
+
+
 def _account_to_dict(acc):
     return {
         "id": acc["AccountID"],
@@ -121,6 +153,7 @@ def _account_to_dict(acc):
         "smtp_port": acc["SMTPPort"],
         "username": acc["Username"],
         "signature_html": acc["SignatureHtml"] or "",
+        "phone": acc["Phone"] or "",
         "is_default": bool(acc["IsDefault"]),
         "shared": bool(acc.get("CanonicalAccountID")),
         "canonical_id": acc.get("CanonicalAccountID"),
@@ -226,18 +259,22 @@ def create_account(payload: AccountPayload, user=Depends(get_current_user)):
             cur.execute(
                 "UPDATE HUBMAIL_Accounts SET IsDefault=0 WHERE UserID=%s", (user["id"],)
             )
+        signature_html = (
+            payload.signature_html
+            or build_default_signature(payload.display_name, payload.email, payload.phone)
+        )
         cur.execute(
             """
             INSERT INTO HUBMAIL_Accounts
                 (UserID, EmailAddress, DisplayName, IMAPHost, IMAPPort,
-                 SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, IsDefault)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, Phone, IsDefault)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
             (
                 user["id"], payload.email, payload.display_name,
                 imap_host, imap_port, smtp_host, smtp_port,
                 username, encrypt_secret(payload.password),
-                payload.signature_html, 1 if payload.is_default else 0,
+                signature_html, payload.phone, 1 if payload.is_default else 0,
             ),
         )
         conn.commit()
@@ -288,18 +325,29 @@ def update_account(account_id: int, payload: AccountPayload, user=Depends(get_cu
         if payload.password:
             password_enc = encrypt_secret(payload.password)
 
+        signature_html = payload.signature_html
+        if _is_auto_signature(acc["SignatureHtml"]) and (
+            payload.phone != (acc["Phone"] or "")
+            or payload.display_name != (acc["DisplayName"] or "")
+        ):
+            signature_html = build_default_signature(
+                payload.display_name or acc["DisplayName"],
+                payload.email or acc["EmailAddress"],
+                payload.phone,
+            )
+
         cur.execute(
             """
             UPDATE HUBMAIL_Accounts SET
                 EmailAddress=%s, DisplayName=%s, IMAPHost=%s, IMAPPort=%s,
                 SMTPHost=%s, SMTPPort=%s, Username=%s, PasswordEnc=%s,
-                SignatureHtml=%s, IsDefault=%s
+                SignatureHtml=%s, Phone=%s, IsDefault=%s
             WHERE AccountID=%s AND UserID=%s
             """,
             (
                 payload.email, payload.display_name,
                 imap_host, imap_port, smtp_host, smtp_port, username,
-                password_enc, payload.signature_html,
+                password_enc, signature_html, payload.phone,
                 1 if payload.is_default else 0, account_id, user["id"],
             ),
         )
