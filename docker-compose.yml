@@ -1,0 +1,19 @@
+services:
+  hubmail:
+    build: .
+    container_name: hubmail
+    restart: unless-stopped
+    ports:
+      - "8502:8502"
+    environment:
+      HUBMAIL_DB_SERVER: ${HUBMAIL_DB_SERVER:-172.26.117.220}
+      HUBMAIL_DB_USER: ${HUBMAIL_DB_USER:-sa}
+      HUBMAIL_DB_PASSWORD: ${HUBMAIL_DB_PASSWORD:-eyccazo}
+      HUBMAIL_DB_NAME: ${HUBMAIL_DB_NAME:-ECCSA_Admon_Pruebas}
+      HUBMAIL_JWT_SECRET: ${HUBMAIL_JWT_SECRET:-cambia-este-secreto-hubmail}
+      HUB_MIGRATE_PRODUCTION: ${HUB_MIGRATE_PRODUCTION:-0}
+    volumes:
+      - hubmail_data:/data
+
+volumes:
+  hubmail_data:
