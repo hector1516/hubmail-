@@ -168,6 +168,7 @@ function renderShell() {
 
   renderSidebar();
   renderContent();
+  if (window.innerWidth <= 820) document.getElementById("sidebar").classList.add("open");
 }
 
 function buildFolderTree(folders, delimiter) {
@@ -260,6 +261,7 @@ function renderSidebar() {
       state.page = 1;
       state.q = "";
       state.unreadOnly = false;
+      sb.classList.remove("open");
       loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
     };
   });
