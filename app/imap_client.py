@@ -76,9 +76,12 @@ def _parse_folder_line(line):
         flags = rest[1:end].split()
         rest = rest[end + 1:].strip()
     parts = rest.split(" ", 1)
-    delim_raw = parts[0].strip('"') if parts else ""
-    delimiter = delim_raw if delim_raw and delim_raw != "NIL" else ""
-    name = parts[1] if len(parts) > 1 else parts[0]
+    delimiter = ""
+    name = parts[0]
+    if len(parts) > 1:
+        delim_raw = parts[0].strip('"')
+        delimiter = delim_raw if delim_raw and delim_raw != "NIL" else ""
+        name = parts[1]
     name = name.strip().strip('"').replace('\\"', '"')
     return flags, delimiter, name
 
@@ -269,6 +272,16 @@ class IMAPClient:
         try:
             conn.select(_utf7_encode(folder))
             conn.store(msgid, "+FLAGS", "\\Deleted")
+            conn.expunge()
+        finally:
+            self.close()
+
+    def delete_messages(self, folder, ids):
+        conn = self._connect()
+        try:
+            conn.select(_utf7_encode(folder))
+            for mid in ids:
+                conn.store(mid, "+FLAGS", "\\Deleted")
             conn.expunge()
         finally:
             self.close()

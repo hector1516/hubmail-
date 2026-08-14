@@ -62,6 +62,11 @@ class SendPayload(BaseModel):
     attachments: list[Attachment] = Field(default_factory=list)
 
 
+class BulkDeletePayload(BaseModel):
+    folder: str = "INBOX"
+    ids: list[str]
+
+
 class ContactPayload(BaseModel):
     name: str
     email: str
@@ -344,6 +349,19 @@ def unread_count(account_id: int, user=Depends(get_current_user)):
         return {"unread": None}
 
 
+@app.post("/api/accounts/{account_id}/messages/bulk-delete")
+def bulk_delete(account_id: int, payload: BulkDeletePayload, user=Depends(get_current_user)):
+    acc = _get_account(user, account_id)
+    if not payload.ids:
+        raise HTTPException(400, "No hay mensajes seleccionados")
+    try:
+        with _imap_for(acc) as imap:
+            imap.delete_messages(payload.folder, payload.ids)
+    except IMAPError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "deleted": len(payload.ids)}
+
+
 @app.post("/api/accounts/{account_id}/send")
 def send_message(account_id: int, payload: SendPayload, user=Depends(get_current_user)):
     acc = _get_account(user, account_id)
@@ -393,19 +411,21 @@ def list_contacts(user=Depends(get_current_user)):
     conn = get_conn()
     try:
         cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT Nombre, Email FROM HUB_Users WHERE Activo=1 ORDER BY Nombre")
+        users = [{"name": r["Nombre"], "email": r["Email"]} for r in cur.fetchall()]
         cur.execute(
             "SELECT ContactID, Name, Email, Phone, Notes FROM HUBMAIL_Contacts ORDER BY Name"
         )
-        out = []
+        contacts = []
         for r in cur.fetchall():
-            out.append({
+            contacts.append({
                 "id": r["ContactID"],
                 "name": r["Name"],
                 "email": r["Email"],
                 "phone": r["Phone"] or "",
                 "notes": r["Notes"] or "",
             })
-        return out
+        return {"users": users, "contacts": contacts}
     finally:
         conn.close()
 

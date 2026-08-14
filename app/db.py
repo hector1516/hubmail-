@@ -11,4 +11,5 @@ def get_conn():
         database=settings.db_name,
         login_timeout=10,
         autocommit=False,
+        charset="cp1252",
     )

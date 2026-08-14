@@ -154,14 +154,23 @@ main { flex: 1; display: flex; overflow: hidden; }
 .list-toolbar { padding: 10px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; flex-wrap: wrap; }
 .list-toolbar .folder-title { font-weight: 700; width: 100%; font-size: 14px; }
 .list-toolbar input { flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 13px; }
+.bulk-bar { display: none; width: 100%; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sec-title { font-size: 13px; color: var(--muted); margin: 14px 0 4px; }
 #message-list { flex: 1; overflow-y: auto; }
 .msg-item {
   padding: 12px 12px;
   border-bottom: 1px solid #eef1f6;
   cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
+.msg-item .msg-main { flex: 1; min-width: 0; }
+.msg-item .msg-check { margin-top: 3px; cursor: pointer; flex-shrink: 0; }
 .msg-item:hover { background: #f5f8fc; }
+.msg-item.selected { background: #e3f0ff; }
 .msg-item.unread { background: #eef6ff; }
+.msg-item.unread.selected { background: #d8eaff; }
 .msg-item.unread .subject { font-weight: 700; }
 .msg-item .row1 { display: flex; justify-content: space-between; gap: 8px; }
 .msg-item .from { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

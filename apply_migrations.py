@@ -25,6 +25,7 @@ def main():
         database=db,
         login_timeout=10,
         autocommit=True,
+        charset="cp1252",
     )
     cur = conn.cursor()
     cur.execute(

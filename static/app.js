@@ -14,6 +14,7 @@ const state = {
   unreadOnly: false,
   currentMsgId: null,
   composeAttachments: [],
+  selected: new Set(),
 };
 
 const app = document.getElementById("app");
@@ -128,6 +129,7 @@ async function loadFolders() {
 
 async function loadMessages() {
   if (!state.currentAccountId) return;
+  state.selected.clear();
   const qs = `?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`;
   const data = await api(`/accounts/${state.currentAccountId}/messages${qs}`);
   state.messages = data.messages;
@@ -226,11 +228,13 @@ function renderSidebar() {
   sb.innerHTML = `
     <div class="side-actions">
       <button class="btn-ghost btn" id="sb-compose">✉️ Redactar</button>
+      <button class="btn-ghost btn" id="sb-contacts">👥 Contactos</button>
       <button class="btn-ghost btn" id="sb-accounts">⚙️ Cuentas y firma</button>
     </div>
     ${list}`;
 
   document.getElementById("sb-compose").onclick = () => { sb.classList.remove("open"); openCompose(); };
+  document.getElementById("sb-contacts").onclick = () => { sb.classList.remove("open"); openContactsManager(); };
   document.getElementById("sb-accounts").onclick = () => { sb.classList.remove("open"); openAccountsModal(); };
 
   sb.querySelectorAll(".account-head").forEach(el => {
@@ -280,13 +284,17 @@ function renderContent() {
     ? state.messages.map(m => {
         const from = m.from[0];
         const sender = from ? (from.name || from.email) : "?";
+        const sel = state.selected.has(m.id);
         return `
-        <div class="msg-item ${m.unread ? "unread" : ""}" data-id="${esc(m.id)}">
-          <div class="row1">
-            <div class="from">${esc(sender)}</div>
-            <div class="date">${esc(m.date)}</div>
+        <div class="msg-item ${m.unread ? "unread" : ""} ${sel ? "selected" : ""}" data-id="${esc(m.id)}">
+          <input type="checkbox" class="msg-check" data-id="${esc(m.id)}" ${sel ? "checked" : ""}>
+          <div class="msg-main">
+            <div class="row1">
+              <div class="from">${esc(sender)}</div>
+              <div class="date">${esc(m.date)}</div>
+            </div>
+            <div class="subject">${m.flagged ? "★ " : ""}${esc(m.subject)}</div>
           </div>
-          <div class="subject">${m.flagged ? "★ " : ""}${esc(m.subject)}</div>
         </div>`;
       }).join("")
     : `<div class="empty">Sin mensajes</div>`;
@@ -298,6 +306,11 @@ function renderContent() {
         <input id="search-box" placeholder="Buscar..." value="${esc(state.q)}">
         <button class="btn-ghost btn btn-sm" id="btn-refresh">⟳</button>
         <button class="btn-ghost btn btn-sm" id="btn-unread">${state.unreadOnly ? "Todo" : "No leídos"}</button>
+        <div class="bulk-bar" id="bulk-bar">
+          <button class="btn-ghost btn btn-sm" id="btn-sel-all">☑ Todo</button>
+          <button class="btn-danger btn btn-sm" id="btn-del-sel">🗑 Eliminar (<span id="sel-count">0</span>)</button>
+          <button class="btn-ghost btn btn-sm" id="btn-clear-sel">Cancelar</button>
+        </div>
       </div>
       <div id="message-list">${msgs}</div>
       <div class="pager">
@@ -332,6 +345,43 @@ function renderContent() {
   document.querySelectorAll("#message-list .msg-item").forEach(el => {
     el.onclick = () => openMessage(el.dataset.id);
   });
+  document.querySelectorAll(".msg-check").forEach(cb => {
+    cb.onclick = (e) => {
+      e.stopPropagation();
+      const id = cb.dataset.id;
+      if (cb.checked) state.selected.add(id);
+      else state.selected.delete(id);
+      cb.closest(".msg-item").classList.toggle("selected", cb.checked);
+      updateBulkBar();
+    };
+  });
+  document.getElementById("btn-sel-all").onclick = () => {
+    if (state.selected.size === state.messages.length) state.selected.clear();
+    else state.messages.forEach(m => state.selected.add(m.id));
+    renderContent();
+  };
+  document.getElementById("btn-clear-sel").onclick = () => {
+    state.selected.clear();
+    renderContent();
+  };
+  document.getElementById("btn-del-sel").onclick = async () => {
+    const n = state.selected.size;
+    if (!n) return;
+    if (!confirm(`¿Eliminar ${n} mensaje(s) definitivamente? Esta acción no se puede deshacer.`)) return;
+    try {
+      await api(`/accounts/${state.currentAccountId}/messages/bulk-delete`, {
+        method: "POST",
+        body: JSON.stringify({ folder: state.currentFolder, ids: [...state.selected] }),
+      });
+      state.selected.clear();
+      await loadMessages();
+      renderContent();
+      toast(`${n} mensaje(s) eliminado(s)`, "ok");
+    } catch (e) {
+      toast(e.message, "error");
+    }
+  };
+  updateBulkBar();
 
   const dp = document.getElementById("detail-pane");
   if (state.currentMsgId) {
@@ -341,6 +391,13 @@ function renderContent() {
   } else {
     dp.innerHTML = `<div class="empty" style="margin-top:80px">Selecciona un mensaje para leerlo</div>`;
   }
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById("bulk-bar");
+  const count = document.getElementById("sel-count");
+  if (bar) bar.style.display = state.selected.size ? "flex" : "none";
+  if (count) count.textContent = state.selected.size;
 }
 
 async function openMessage(id) {
@@ -470,24 +527,7 @@ function openCompose(prefill = {}) {
       reader.readAsDataURL(f);
     });
   };
-  document.getElementById("c-contacts").onclick = () => {
-    api("/contacts").then(contacts => {
-      openModal(`
-        <h2>Contactos compartidos</h2>
-        <div>${contacts.map(c =>
-          `<div class="contact-item"><div><b>${esc(c.name)}</b><div class="c-email">${esc(c.email)}</div></div>
-           <button class="btn-ghost btn btn-sm" data-email="${esc(c.email)}">Usar</button></div>`).join("") || `<div class="empty">Sin contactos</div>`}</div>
-        <div class="actions"><button class="btn-ghost btn" id="cc-close">Cerrar</button></div>`);
-      document.getElementById("cc-close").onclick = () => openCompose(prefill);
-      document.querySelectorAll("[data-email]").forEach(b => {
-        b.onclick = () => {
-          const to = document.getElementById("c-to");
-          to.value = to.value ? to.value + ", " + b.dataset.email : b.dataset.email;
-          openCompose(prefill);
-        };
-      });
-    });
-  };
+  document.getElementById("c-contacts").onclick = () => openContactsManager(true);
 }
 
 function renderAttachList() {
@@ -525,6 +565,99 @@ async function sendMessage() {
     btn.disabled = false;
     btn.textContent = "Enviar";
   }
+}
+
+/* ============================================================ contactos */
+function useContact(email) {
+  const to = document.getElementById("c-to");
+  if (to) {
+    to.value = to.value ? to.value + ", " + email : email;
+    return;
+  }
+  openCompose({ to: [email] });
+}
+
+async function openContactsManager(pickMode = false) {
+  let data;
+  try {
+    data = await api("/contacts");
+  } catch (e) {
+    return toast(e.message, "error");
+  }
+  const usersHtml = data.users.map(u =>
+    `<div class="contact-item">
+      <div><b>${esc(u.name)}</b><div class="c-email">${esc(u.email)}</div></div>
+      <button class="btn-ghost btn btn-sm" data-email="${esc(u.email)}">Usar</button>
+    </div>`).join("") || `<div class="empty">Sin usuarios activos</div>`;
+  const contactsHtml = data.contacts.map(c =>
+    `<div class="contact-item">
+      <div><b>${esc(c.name)}</b><div class="c-email">${esc(c.email)}</div></div>
+      <div>
+        ${pickMode ? `<button class="btn-ghost btn btn-sm" data-email="${esc(c.email)}">Usar</button>` : ""}
+        <button class="btn-ghost btn btn-sm" data-edit="${c.id}" title="Editar">✎</button>
+        <button class="btn-danger btn btn-sm" data-del="${c.id}" title="Eliminar">✕</button>
+      </div>
+    </div>`).join("") || `<div class="empty">Sin contactos recopilados</div>`;
+
+  openModal(`
+    <h2>Contactos</h2>
+    <h3 class="sec-title">Usuarios ECCSA</h3>
+    ${usersHtml}
+    <h3 class="sec-title">Contactos recopilados</h3>
+    ${contactsHtml}
+    <div class="actions">
+      <button class="btn-ghost btn" id="ct-new">+ Agregar</button>
+      <span class="spacer"></span>
+      <button class="btn-ghost btn" id="ct-close">Cerrar</button>
+    </div>`);
+
+  document.getElementById("ct-close").onclick = closeModal;
+  document.getElementById("ct-new").onclick = () => openContactForm(null, pickMode);
+  document.querySelectorAll("[data-email]").forEach(b => {
+    b.onclick = () => { closeModal(); useContact(b.dataset.email); };
+  });
+  document.querySelectorAll("[data-edit]").forEach(b => {
+    b.onclick = () => openContactForm(data.contacts.find(x => x.id === parseInt(b.dataset.edit)), pickMode);
+  });
+  document.querySelectorAll("[data-del]").forEach(b => {
+    b.onclick = async () => {
+      if (!confirm("¿Eliminar este contacto recopilado?")) return;
+      try {
+        await api(`/contacts/${b.dataset.del}`, { method: "DELETE" });
+        toast("Contacto eliminado", "ok");
+      } catch (e) { toast(e.message, "error"); }
+      openContactsManager(pickMode);
+    };
+  });
+}
+
+function openContactForm(c, pickMode) {
+  openModal(`
+    <h2>${c ? "Editar contacto" : "Nuevo contacto"}</h2>
+    <div class="field"><label>Nombre</label><input id="cf-name" value="${esc(c?.name || "")}"></div>
+    <div class="field"><label>Email</label><input id="cf-email" value="${esc(c?.email || "")}"></div>
+    <div class="field"><label>Teléfono</label><input id="cf-phone" value="${esc(c?.phone || "")}"></div>
+    <div class="field"><label>Notas</label><textarea id="cf-notes">${esc(c?.notes || "")}</textarea></div>
+    <div class="actions">
+      <button class="btn-ghost btn" id="cf-cancel">Cancelar</button>
+      <button class="btn-primary btn" id="cf-save">Guardar</button>
+    </div>`);
+  document.getElementById("cf-cancel").onclick = () => openContactsManager(pickMode);
+  document.getElementById("cf-save").onclick = async () => {
+    const payload = {
+      name: document.getElementById("cf-name").value.trim(),
+      email: document.getElementById("cf-email").value.trim(),
+      phone: document.getElementById("cf-phone").value.trim(),
+      notes: document.getElementById("cf-notes").value.trim(),
+    };
+    if (!payload.name || !payload.email) return toast("Nombre y email son obligatorios", "error");
+    try {
+      if (c) await api(`/contacts/${c.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      else await api("/contacts", { method: "POST", body: JSON.stringify(payload) });
+      toast("Contacto guardado", "ok");
+    } catch (e) { toast(e.message, "error"); }
+    openContactsManager(pickMode);
+  };
 }
 
 /* ============================================================ accounts */
