@@ -277,6 +277,16 @@ class IMAPClient:
         finally:
             self.close()
 
+    def set_flags(self, folder, ids, flag, value):
+        conn = self._connect()
+        try:
+            conn.select(_q(_utf7_encode(folder)))
+            prefix = "+" if value else "-"
+            if ids:
+                conn.uid("store", ",".join(ids), prefix + "FLAGS", flag)
+        finally:
+            self.close()
+
     def move_message(self, folder, msgid, dest):
         conn = self._connect()
         try:

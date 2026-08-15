@@ -396,6 +396,7 @@ function messagesHtml() {
     return `
       <div class="msg-item ${m.unread ? "unread" : ""} ${sel ? "selected" : ""}" data-id="${esc(m.id)}" draggable="true">
         <input type="checkbox" class="msg-check" data-id="${esc(m.id)}" ${sel ? "checked" : ""}>
+        <button class="msg-unread-btn" title="Marcar como no leído">◌</button>
         <div class="msg-main">
           <div class="row1">
             <div class="from">${m.spam ? '<span class="spam-badge">SPAM</span> ' : ""}${esc(sender)}</div>
@@ -438,6 +439,12 @@ function bindMessageList() {
       el.classList.remove("dragging");
       dragData = null;
     });
+    const unreadBtn = el.querySelector(".msg-unread-btn");
+    if (unreadBtn) unreadBtn.onclick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      setMessageSeen(el.dataset.id, false);
+    };
   });
   document.querySelectorAll(".msg-check").forEach(cb => {
     cb.onclick = (e) => {
@@ -759,6 +766,8 @@ function renderContent() {
         <button class="btn-ghost btn btn-sm" id="btn-unread">${state.unreadOnly ? "Todo" : "No leídos"}</button>
         <div class="bulk-bar" id="bulk-bar">
           <button class="btn-ghost btn btn-sm" id="btn-sel-all">☑ Todo</button>
+          <button class="btn-ghost btn btn-sm" id="btn-read-sel">✓ Leído</button>
+          <button class="btn-ghost btn btn-sm" id="btn-unread-sel">◌ No leído</button>
           <button class="btn-danger btn btn-sm" id="btn-del-sel">🗑 Eliminar (<span id="sel-count">0</span>)</button>
           <button class="btn-ghost btn btn-sm" id="btn-clear-sel">Cancelar</button>
         </div>
@@ -830,6 +839,27 @@ function renderContent() {
       hideLoading();
     }
   };
+  const setBulkSeen = async (seen) => {
+    const n = state.selected.size;
+    if (!n) return;
+    showLoading(seen ? "Marcando como leído…" : "Marcando como no leído…");
+    try {
+      await api(`/accounts/${state.currentAccountId}/messages/bulk-seen`, {
+        method: "POST",
+        body: JSON.stringify({ folder: state.currentFolder, ids: [...state.selected], seen }),
+      });
+      state.selected.clear();
+      await loadMessages();
+      renderContent();
+      toast(seen ? `${n} mensaje(s) leídos` : `${n} mensaje(s) marcados como no leídos`, "ok");
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      hideLoading();
+    }
+  };
+  document.getElementById("btn-read-sel").onclick = () => setBulkSeen(true);
+  document.getElementById("btn-unread-sel").onclick = () => setBulkSeen(false);
   updateBulkBar();
 
   const dp = document.getElementById("detail-pane");
@@ -876,6 +906,18 @@ async function openMessage(id) {
   }
 }
 
+async function setMessageSeen(id, seen) {
+  try {
+    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(state.currentFolder)}&action=${seen ? "read" : "unread"}`, { method: "PATCH" });
+    state.messages.forEach(x => { if (x.id === id) x.unread = !seen; });
+    const el = document.querySelector(`#message-list .msg-item[data-id="${esc(id)}"]`);
+    if (el) el.classList.toggle("unread", !seen);
+    toast(seen ? "Marcado como leído" : "Marcado como no leído", "ok");
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
 async function loadMessageDetail(id) {
   return api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(state.currentFolder)}`);
 }
@@ -910,6 +952,7 @@ function detailHtml(m) {
       <button class="btn-ghost btn btn-sm" id="d-reply">↩ Responder</button>
       <button class="btn-ghost btn btn-sm" id="d-fwd">↪ Reenviar</button>
       <button class="btn-ghost btn btn-sm" id="d-flag">${m.flagged ? "★" : "☆"}</button>
+      <button class="btn-ghost btn btn-sm" id="d-unread" title="Marcar como no leído">◌ No leído</button>
       <button class="btn-ghost btn btn-sm" id="d-print">🖨 Imprimir</button>
       <button class="btn-ghost btn btn-sm" id="d-notspam" style="display:${m.spam ? "" : "none"}">No es spam</button>
       <span class="spacer"></span>
@@ -957,6 +1000,14 @@ function bindDetailActions(m) {
     await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=${m.flagged ? "unflag" : "flag"}`, { method: "PATCH" }).catch(() => {});
     m.flagged = !m.flagged;
     document.getElementById("d-flag").textContent = m.flagged ? "★" : "☆";
+  };
+  document.getElementById("d-unread").onclick = async () => {
+    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=unread`, { method: "PATCH" }).catch(() => {});
+    m.unread = true;
+    state.messages.forEach(x => { if (x.id === m.id) x.unread = true; });
+    const el = document.querySelector(`#message-list .msg-item[data-id="${esc(m.id)}"]`);
+    if (el) el.classList.add("unread");
+    toast("Marcado como no leído", "ok");
   };
   document.getElementById("d-reply").onclick = () => {
     const f = m.from[0];

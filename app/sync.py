@@ -73,6 +73,7 @@ def parse_email(raw_bytes):
     body_html = ""
     body_text = ""
     attachments = 0
+    attachment_items = []
     for part in msg.walk():
         if part.is_multipart():
             continue
@@ -84,6 +85,23 @@ def parse_email(raw_bytes):
         fn = part.get_filename()
         if disp == "attachment" or (fn and not disp):
             attachments += 1
+            attachment_items.append({
+                "name": _decode_mime(fn) or "adjunto",
+                "content_type": ct,
+                "cid": "",
+                "size": len(payload),
+                "data": payload,
+            })
+        elif ct.startswith("image/") and disp == "inline":
+            cid = part.get("Content-ID")
+            cid_clean = cid.strip("<>") if cid else ""
+            attachment_items.append({
+                "name": _decode_mime(fn) or cid_clean or "inline",
+                "content_type": ct,
+                "cid": cid_clean,
+                "size": len(payload),
+                "data": payload,
+            })
         elif ct == "text/html" and not body_html:
             body_html = _decode_payload(payload, part.get_content_charset())
         elif ct == "text/plain" and not body_text:
@@ -111,6 +129,7 @@ def parse_email(raw_bytes):
         "body_html": body_html,
         "body_text": body_text,
         "attachments": attachments,
+        "attachment_items": attachment_items,
         "size": len(raw_bytes),
     }
 
@@ -148,13 +167,20 @@ def _load_existing(account_id, folder):
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT UID, BodyHtml FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s",
+            "SELECT m.UID, m.BodyHtml, m.HasAttachments, "
+            "(SELECT COUNT(*) FROM HUBMAIL_Attachments a WHERE a.AccountID=m.AccountID AND a.Folder=m.Folder AND a.UID=m.UID) AS AttCount "
+            "FROM HUBMAIL_Messages m WHERE m.AccountID=%s AND m.Folder=%s",
             (account_id, folder),
         )
-        return {
-            int(r["UID"]): {"has_body": bool(r["BodyHtml"])}
-            for r in cur.fetchall()
-        }
+        result = {}
+        for r in cur.fetchall():
+            uid = int(r["UID"])
+            needs_att = bool(r["HasAttachments"]) and (r["AttCount"] or 0) == 0
+            result[uid] = {
+                "has_body": bool(r["BodyHtml"]),
+                "needs_full": needs_att,
+            }
+        return result
     finally:
         conn.close()
 
@@ -220,6 +246,30 @@ def _folder_db_count(account_id, folder):
         conn.close()
 
 
+def _replace_attachments(account_id, folder, uid, items):
+    if not items:
+        return
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (account_id, folder, uid),
+        )
+        cur.executemany(
+            "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            [
+                (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]), _safe(a["cid"]),
+                 a["size"], a["data"])
+                for a in items
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _upsert_message(account_id, folder, uid, flags, raw):
     p = parse_email(raw)
     conn = get_conn()
@@ -266,6 +316,7 @@ def _upsert_message(account_id, folder, uid, flags, raw):
         conn.commit()
     finally:
         conn.close()
+    _replace_attachments(account_id, folder, uid, p["attachment_items"])
 
 
 def _insert_many(account_id, folder, items):
@@ -275,6 +326,7 @@ def _insert_many(account_id, folder, items):
     try:
         cur = conn.cursor()
         data = []
+        att_rows = []
         for uid, meta, raw in items:
             try:
                 p = parse_email(raw)
@@ -295,6 +347,11 @@ def _insert_many(account_id, folder, items):
                 _safe(p["body_html"]), _safe(p["body_text"]), p["size"],
                 extract_sender_ip(raw),
             ])
+            for a in p["attachment_items"]:
+                att_rows.append(
+                    (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]),
+                     _safe(a["cid"]), a["size"], a["data"])
+                )
         if not data:
             return 0
         sql = """INSERT INTO HUBMAIL_Messages
@@ -303,23 +360,44 @@ def _insert_many(account_id, folder, items):
                 HasAttachments, BodyHtml, BodyText, Size, SenderIP)
                VALUES
                 (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s,%s,%s)"""
+        ok = 0
         try:
             cur.executemany(sql, data)
+            ok = len(data)
         except Exception as e:
             print(f"[SYNC] batch insert falló ({e}), reintento por fila", flush=True)
             conn.rollback()
             cur = conn.cursor()
-            ok = 0
             for row in data:
                 try:
                     cur.execute(sql, row)
                     ok += 1
                 except Exception as e2:
                     print(f"[SYNC] fila rechazada uid={row[2]}: {e2}", flush=True)
-            conn.commit()
-            return ok
         conn.commit()
-        return len(data)
+        if att_rows:
+            try:
+                cur.executemany(
+                    "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    att_rows,
+                )
+                conn.commit()
+            except Exception as e:
+                print(f"[SYNC] attachments batch falló ({e}), reintento por fila", flush=True)
+                conn.rollback()
+                cur = conn.cursor()
+                for row in att_rows:
+                    try:
+                        cur.execute(
+                            "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                            row,
+                        )
+                    except Exception as e2:
+                        print(f"[SYNC] adjunto rechazado uid={row[2]}: {e2}", flush=True)
+                conn.commit()
+        return ok
     finally:
         conn.close()
 
@@ -331,6 +409,7 @@ def _update_body_many(account_id, folder, items):
     try:
         cur = conn.cursor()
         data = []
+        att_rows = []
         for uid, meta, raw in items:
             try:
                 p = parse_email(raw)
@@ -350,6 +429,11 @@ def _update_body_many(account_id, folder, items):
                 _safe(p["body_html"]), _safe(p["body_text"]), p["size"],
                 account_id, folder, uid,
             ])
+            for a in p["attachment_items"]:
+                att_rows.append(
+                    (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]),
+                     _safe(a["cid"]), a["size"], a["data"])
+                )
         if not data:
             return 0
         sql = """UPDATE HUBMAIL_Messages SET
@@ -359,23 +443,32 @@ def _update_body_many(account_id, folder, items):
                HasAttachments=%s, BodyHtml=%s, BodyText=%s, Size=%s,
                SyncedAt=GETDATE()
                WHERE AccountID=%s AND Folder=%s AND UID=%s"""
+        ok = 0
         try:
             cur.executemany(sql, data)
+            ok = len(data)
         except Exception as e:
             print(f"[SYNC] batch update falló ({e}), reintento por fila", flush=True)
             conn.rollback()
             cur = conn.cursor()
-            ok = 0
             for row in data:
                 try:
                     cur.execute(sql, row)
                     ok += 1
                 except Exception as e2:
                     print(f"[SYNC] fila rechazada uid={row[-1]}: {e2}", flush=True)
-            conn.commit()
-            return ok
         conn.commit()
-        return len(data)
+        uids = sorted({r[2] for r in att_rows})
+        for uid in uids:
+            rows = [r for r in att_rows if r[2] == uid]
+            try:
+                _replace_attachments(account_id, folder, uid, [
+                    {"name": r[3], "content_type": r[4], "cid": r[5], "size": r[6], "data": r[7]}
+                    for r in rows
+                ])
+            except Exception as e:
+                print(f"[SYNC] adjuntos uid={uid}: {e}", flush=True)
+        return ok
     finally:
         conn.close()
 
@@ -431,7 +524,7 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
 
         existing = _load_existing(account_id, folder)
         new_uids = [u for u in uids if u not in existing]
-        missing_body = [u for u in uids if u in existing and not existing[u]["has_body"]]
+        missing_body = [u for u in uids if u in existing and (not existing[u]["has_body"] or existing[u]["needs_full"])]
 
         new = updated = 0
         if new_uids:
@@ -489,6 +582,21 @@ def sync_folder(account_id, folder, force=False, with_bodies=True):
         imap.close()
 
 
+def _save_folders(account_id, delimiter, folders):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM HUBMAIL_Folders WHERE AccountID=%s", (account_id,))
+        if folders:
+            cur.executemany(
+                "INSERT INTO HUBMAIL_Folders (AccountID, Folder, Delimiter, Flags) VALUES (%s,%s,%s,%s)",
+                [(account_id, f["name"], delimiter, ",".join(f.get("flags") or [])) for f in folders],
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def sync_account(account_id):
     account_id = canonical_account_id(account_id)
     acc = _get_account_row(account_id)
@@ -500,7 +608,9 @@ def sync_account(account_id):
     imap = IMAPClient(acc["IMAPHost"], acc["IMAPPort"], acc["Username"], decrypt_secret(acc["PasswordEnc"]))
     try:
         imap.connect()
-        folders = imap.list_folders()["folders"]
+        lf = imap.list_folders()
+        folders = lf["folders"]
+        _save_folders(account_id, lf["delimiter"], folders)
     except IMAPError as e:
         print(f"[SYNC] account {account_id}: error conexión/listado: {e}", flush=True)
         _account_busy[account_id] = False

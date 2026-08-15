@@ -284,6 +284,19 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 }
 .msg-item .msg-main { flex: 1; min-width: 0; }
 .msg-item .msg-check { margin-top: 3px; cursor: pointer; flex-shrink: 0; }
+.msg-item .msg-unread-btn {
+  visibility: hidden;
+  margin-top: 1px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  flex-shrink: 0;
+  padding: 0 2px;
+}
+.msg-item:hover .msg-unread-btn { visibility: visible; }
+.msg-item .msg-unread-btn:hover { color: var(--accent); }
 .msg-item:hover { background: #f5f8fc; }
 .msg-item.selected { background: #e3f0ff; }
 .msg-item.unread { background: #eef6ff; }

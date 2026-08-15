@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import base64
 from typing import Optional
 
 import jwt
@@ -201,6 +202,12 @@ class MoveMessagesPayload(BaseModel):
     folder: str
     dest_folder: str
     uids: list[str]
+
+
+class BulkSeenPayload(BaseModel):
+    folder: str = "INBOX"
+    ids: list[str]
+    seen: bool = True
 
 
 class ContactPayload(BaseModel):
@@ -694,11 +701,29 @@ def test_account(account_id: int, user=Depends(get_current_user)):
 @app.get("/api/accounts/{account_id}/folders")
 def list_folders(account_id: int, user=Depends(get_current_user)):
     acc = _canonical_row(_get_account(user, account_id))
+    account_id = acc["AccountID"]
+    conn = get_conn()
     try:
-        with _imap_for(acc) as imap:
-            return imap.list_folders()
-    except IMAPError as e:
-        raise HTTPException(400, str(e))
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT Folder, Delimiter, Flags FROM HUBMAIL_Folders "
+            "WHERE AccountID=%s ORDER BY Folder",
+            (account_id,),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return {"delimiter": "/", "folders": []}
+    delimiter = rows[0]["Delimiter"] or "/"
+    folders = [
+        {
+            "name": r["Folder"],
+            "flags": [f for f in (r["Flags"] or "").split(",") if f],
+        }
+        for r in rows
+    ]
+    return {"delimiter": delimiter, "folders": folders}
 
 
 @app.get("/api/accounts/{account_id}/unread")
@@ -737,7 +762,30 @@ def _msg_row_to_dict(r):
     }
 
 
-def _msg_detail_row(r):
+def _db_get_attachments(account_id, folder, uid):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT Name, ContentType, Cid, Size, Data FROM HUBMAIL_Attachments "
+            "WHERE AccountID=%s AND Folder=%s AND UID=%s ORDER BY AttachID",
+            (account_id, folder, uid),
+        )
+        out = []
+        for r in cur.fetchall():
+            out.append({
+                "name": r["Name"] or "adjunto",
+                "content_type": r["ContentType"] or "application/octet-stream",
+                "cid": r["Cid"] or "",
+                "size": r["Size"] or 0,
+                "data": base64.b64encode(r["Data"]).decode() if r["Data"] else "",
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def _msg_detail_row(r, attachments=None):
     return {
         "id": str(r["UID"]),
         "subject": r["Subject"] or "(sin asunto)",
@@ -750,7 +798,7 @@ def _msg_detail_row(r):
         "spam": bool(r.get("Spam")),
         "body_html": r["BodyHtml"] or "",
         "body_text": r["BodyText"] or "",
-        "attachments": [],
+        "attachments": attachments or [],
         "message_id": r["MessageIdHeader"],
         "in_reply_to": r["InReplyTo"],
     }
@@ -767,11 +815,6 @@ def list_messages(
 ):
     acc = _canonical_row(_get_account(user, account_id))
     account_id = acc["AccountID"]
-    sync_error = None
-    try:
-        syncmod.sync_folder(account_id, folder, with_bodies=False)
-    except Exception as e:
-        sync_error = e
 
     last_sync = None
     conn0 = get_conn()
@@ -812,13 +855,6 @@ def list_messages(
         conn.close()
 
     messages = [_msg_row_to_dict(r) for r in rows]
-    if not messages and sync_error:
-        try:
-            with _imap_for(acc) as imap:
-                criteria = _imap_query(q) if q else "ALL"
-                return imap.list_messages(folder, criteria, page, settings.page_size, unread_only)
-        except IMAPError:
-            raise HTTPException(400, f"No se pudo cargar la carpeta: {sync_error}")
     return {
         "total": total, "page": page, "page_size": settings.page_size,
         "messages": messages, "last_sync": last_sync,
@@ -844,10 +880,10 @@ def get_message(
         row = cur.fetchone()
     finally:
         conn.close()
-    if row and not row["HasAttachments"] and row["BodyHtml"]:
-        return _msg_detail_row(row)
-    with _imap_for(acc) as imap:
-        return imap.get_message(folder, msgid)
+    if not row:
+        raise HTTPException(404, "Mensaje no encontrado en la caché")
+    attachments = _db_get_attachments(account_id, folder, int(msgid))
+    return _msg_detail_row(row, attachments)
 
 
 def _db_update_flags(account_id, folder, uid, seen=None, flagged=None):
@@ -1028,23 +1064,37 @@ def _db_cross_move_message(src_account_id, src_folder, uid, dst_account_id, dst_
                  row["DateSent"], seen, row["Answered"], row["Flagged"], row["HasAttachments"],
                  row["BodyHtml"], row["BodyText"], row["Size"], row["Spam"], row["SenderIP"]),
             )
+            cur.execute(
+                "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (dst_account_id, dst_folder, new_uid),
+            )
+            cur.execute(
+                "SELECT Name, ContentType, Cid, Size, Data FROM HUBMAIL_Attachments "
+                "WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (src_account_id, src_folder, uid),
+            )
+            atts = cur.fetchall()
+            if atts:
+                cur.executemany(
+                    "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    [
+                        (dst_account_id, dst_folder, new_uid, a["Name"], a["ContentType"], a["Cid"],
+                         a["Size"], a["Data"])
+                        for a in atts
+                    ],
+                )
         cur.execute(
             "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (src_account_id, src_folder, uid),
+        )
+        cur.execute(
+            "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
             (src_account_id, src_folder, uid),
         )
         conn.commit()
     finally:
         conn.close()
-
-
-@app.get("/api/accounts/{account_id}/unread")
-def unread_count(account_id: int, user=Depends(get_current_user)):
-    acc = _canonical_row(_get_account(user, account_id))
-    try:
-        with _imap_for(acc) as imap:
-            return {"unread": imap.unread_count("INBOX")}
-    except IMAPError:
-        return {"unread": None}
 
 
 @app.post("/api/accounts/{account_id}/messages/bulk-delete")
@@ -1060,6 +1110,22 @@ def bulk_delete(account_id: int, payload: BulkDeletePayload, user=Depends(get_cu
         raise HTTPException(400, str(e))
     _db_delete_messages(account_id, payload.folder, payload.ids)
     return {"ok": True, "deleted": len(payload.ids)}
+
+
+@app.post("/api/accounts/{account_id}/messages/bulk-seen")
+def bulk_set_seen(account_id: int, payload: BulkSeenPayload, user=Depends(get_current_user)):
+    acc = _canonical_row(_get_account(user, account_id))
+    account_id = acc["AccountID"]
+    if not payload.ids:
+        raise HTTPException(400, "No hay mensajes seleccionados")
+    try:
+        with _imap_for(acc) as imap:
+            imap.set_flags(payload.folder, payload.ids, "\\Seen", payload.seen)
+    except IMAPError as e:
+        raise HTTPException(400, str(e))
+    for uid in payload.ids:
+        _db_update_flags(account_id, payload.folder, int(uid), seen=payload.seen)
+    return {"ok": True, "updated": len(payload.ids), "seen": payload.seen}
 
 
 @app.post("/api/accounts/{account_id}/send")
@@ -1182,12 +1248,6 @@ def notifications(user=Depends(get_current_user)):
     results = []
     for acc in accounts:
         n = acc["Unread"]
-        if not acc["Synced"]:
-            try:
-                with _imap_for(_canonical_row(acc)) as imap:
-                    n = imap.unread_count("INBOX")
-            except Exception:
-                n = None
         results.append({"account_id": acc["AccountID"], "email": acc["EmailAddress"], "unread": n})
     return results
 
@@ -1208,22 +1268,6 @@ def _preview_lines(body_text, body_html, max_lines=5, max_chars=320):
 
 @app.get("/api/notifications/new")
 def new_messages(user=Depends(get_current_user)):
-    conn = get_conn()
-    try:
-        cur = conn.cursor(as_dict=True)
-        cur.execute(
-            "SELECT AccountID, CanonicalAccountID FROM HUBMAIL_Accounts WHERE UserID=%s",
-            (user["id"],),
-        )
-        accs = cur.fetchall()
-    finally:
-        conn.close()
-    for a in accs:
-        try:
-            syncmod.sync_folder(a["CanonicalAccountID"] or a["AccountID"], "INBOX", with_bodies=True)
-        except Exception:
-            pass
-
     conn = get_conn()
     try:
         cur = conn.cursor(as_dict=True)
