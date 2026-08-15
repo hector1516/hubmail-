@@ -188,13 +188,21 @@ function fmtDt(dt) {
 
 async function maybeShowWelcome() {
   try {
-    const data = await api("/welcome");
     const today = new Date().toISOString().slice(0, 10);
     const key = `hubmail_welcome_${state.user.id}_${today}`;
     if (localStorage.getItem(key)) return;
     localStorage.setItem(key, "1");
-    showWelcome(data);
+    await openWelcome();
   } catch (e) {}
+}
+
+async function openWelcome() {
+  try {
+    const data = await api("/welcome");
+    showWelcome(data);
+  } catch (e) {
+    toast(e.message, "error");
+  }
 }
 
 function showWelcome(d) {
@@ -478,7 +486,7 @@ function renderShell() {
     <div class="shell">
       <header>
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
-        <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail<span class="top-user">${esc(state.user?.name || state.user?.email || "")}</span></div>
+        <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail<span class="top-user" id="btn-welcome" title="Ver mi resumen">${esc(state.user?.name || state.user?.email || "")}</span></div>
         <div class="header-right">
           <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
           <button class="icon-btn btn-primary" id="btn-compose">✉️ <span class="btn-label">Redactar</span></button>
@@ -496,6 +504,7 @@ function renderShell() {
   document.getElementById("btn-compose").onclick = () => openCompose();
   document.getElementById("btn-accounts").onclick = () => openAccountsModal();
   document.getElementById("btn-logout").onclick = logout;
+  document.getElementById("btn-welcome").onclick = () => openWelcome();
   document.getElementById("btn-notif").onclick = () => {
     state.unreadOnly = !state.unreadOnly;
     state.page = 1;

@@ -124,6 +124,8 @@ header {
   white-space: nowrap;
 }
 .brand-logo { height: 30px; width: 30px; border-radius: 7px; background: #fff; padding: 3px; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+#btn-welcome { cursor: pointer; transition: opacity .15s; }
+#btn-welcome:hover { opacity: 1; text-decoration: underline; }
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .user-name { font-size: 13px; opacity: .9; }
 .badge {
