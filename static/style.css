@@ -398,6 +398,34 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 .badge-saved { background: #f3ecfb; color: #7a3cb0; }
 .contacts-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .ct-count { font-size: 11px; color: var(--muted); }
+
+/* ---------- popup de bienvenida ---------- */
+.welcome-modal { text-align: center; }
+.wm-hero { font-size: 26px; font-weight: 800; margin-bottom: 6px; }
+.wm-slogan { font-size: 14px; color: var(--muted); margin-bottom: 16px; }
+.wm-resume { font-size: 13px; color: #444; margin-bottom: 14px; }
+.wm-clear { font-size: 15px; color: #2f7d20; padding: 10px 0 18px; }
+.wm-stats { display: flex; gap: 12px; justify-content: center; margin-bottom: 16px; flex-wrap: wrap; }
+.wm-stat { background: #f2f6fc; border: 1px solid var(--border); border-radius: 12px; padding: 12px 18px; min-width: 120px; }
+.wm-stat.main { background: #e8f1ff; border-color: #bcd3f5; }
+.wm-num { font-size: 28px; font-weight: 800; color: var(--accent); line-height: 1; }
+.wm-stat.main .wm-num { color: #1a5fb4; }
+.wm-stat > div:last-child { font-size: 11px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.wm-folders { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 16px; }
+.wm-folder { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 3px 10px; font-size: 11px; }
+.wm-folder-name { color: var(--muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wm-folder b { color: #d63031; }
+.wm-section { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); text-align: left; margin: 14px 0 8px; }
+.wm-preview { text-align: left; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.wm-mail { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid #eef1f6; font-size: 13px; }
+.wm-mail:last-child { border-bottom: none; }
+.wm-mail:hover { background: #f5f8fc; }
+.wm-mail-left { min-width: 0; }
+.wm-mail-from { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wm-mail-subject { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wm-mail-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.wm-folder-tag { font-size: 10px; background: #eef1f6; color: var(--muted); border-radius: 8px; padding: 2px 7px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wm-mail-date { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .admin-hint { color: var(--muted); font-size: 12px; margin-bottom: 10px; background: rgba(0,0,0,.04); padding: 8px 10px; border-radius: 8px; }
 .assign-row { padding: 6px 4px; border-bottom: 1px solid #eef1f6; font-size: 13px; }
 .assign-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; }

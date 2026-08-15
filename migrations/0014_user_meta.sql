@@ -1,0 +1,7 @@
+IF OBJECT_ID('HUBMAIL_UserMeta','U') IS NULL
+BEGIN
+    CREATE TABLE HUBMAIL_UserMeta (
+        UserID INT NOT NULL PRIMARY KEY,
+        LastLogin DATETIME NULL
+    );
+END;

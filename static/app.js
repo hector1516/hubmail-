@@ -152,6 +152,100 @@ function logout() {
 }
 
 /* ============================================================ shell */
+
+const WELCOME_LINES = [
+  (n, u) => `Tienes ${u} correo${u === 1 ? "" : "s"} sin leer, ${n}. Tu bandeja lleva contando los minutos… y los no leídos. 📬`,
+  (n, u) => `${n}, esos ${u} correo${u === 1 ? "" : "s"} no se van a leer solos. Bueno, podrían… pero hoy les toca a ti. 😄`,
+  (n, u) => `Bienvenido de vuelta, ${n}. El café ya está listo y tu bandeja también: ${u} pendiente${u === 1 ? "" : "s"} esperando. ☕`,
+  (n, u) => `¡Hola ${n}! A tu bandeja le urgen vacaciones, pero por hoy ${u} correo${u === 1 ? "" : "s"} te recuerdan quién manda. 😅`,
+  (n, u) => `${n}, tu INBOX amaneció con hambre: ${u} correo${u === 1 ? "" : "s"} para desayunar. 🍳`,
+  (n, u) => `Nadie dijo que ser ${n} fuera fácil: te esperan ${u} correo${u === 1 ? "" : "s"} sin leer y una taza de café con tu nombre. 🏆`,
+  (n, u) => `Reporte matutino, ${n}: ${u} mensaje${u === 1 ? "" : "s"} sin abrir. La bandeja confía plenamente en ti (aunque ya tiene dudas). 🤔`,
+  (n, u) => `¡Saludos, ${n}! Aquí tu resumen: ${u} correo${u === 1 ? "" : "s"} jugando a las escondidas. Adivina quién tiene que encontrarlos… 👀`,
+  (n, u) => `${n}, esos ${u} correo${u === 1 ? "" : "s"} llevan rato gritando “léeme”. Hoy sí les haces caso, ¿no? 😜`,
+  (n, u) => `Bienvenido, ${n}. Estadística del día: ${u} correo${u === 1 ? "" : "s"} sin leer y ${u === 0 ? "una bandeja muy relajada 😌" : "un dedo muy ocupado 👆"}`,
+  (n, u) => `Hola ${n}, tu bandeja tiene ${u} pendiente${u === 1 ? "" : "s"} y cero paciencia. Manos a la obra. 🚀`,
+  (n, u) => `${n}, los ${u} correo${u === 1 ? "" : "s"} sin leer te mandan saludos desde tu carpeta de entrada. Eso es muy de ellos. 📥`,
+  (n, u) => `¡Ahí está ${n}! Mientras no mirabas, llegaron ${u} correo${u === 1 ? "" : "s"} más. La bandeja nunca duerme (tú tampoco, ¿verdad?). 🌙`,
+  (n, u) => `Bienvenido, ${n}. Tu resumen de pendientes es corto y claro: ${u} correo${u === 1 ? "" : "s"}. Suerte (la vas a necesitar). 🍀`,
+  (n, u) => `${n}, el correo no se responde solo… aunque a veces desearíamos que sí. ${u} pendiente${u === 1 ? "" : "s"} te esperan. 💪`,
+];
+
+function welcomeLine(name, unread) {
+  const lines = WELCOME_LINES;
+  return lines[Math.floor(Math.random() * lines.length)](name, unread);
+}
+
+function fmtDt(dt) {
+  if (!dt) return "";
+  const d = new Date(dt);
+  if (isNaN(d)) return "";
+  return d.toLocaleString("es-MX", {
+    day: "numeric", month: "long", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+async function maybeShowWelcome() {
+  try {
+    const data = await api("/welcome");
+    const today = new Date().toISOString().slice(0, 10);
+    const key = `hubmail_welcome_${state.user.id}_${today}`;
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+    showWelcome(data);
+  } catch (e) {}
+}
+
+function showWelcome(d) {
+  const firstName = (state.user.name || "amigo").split(" ")[0];
+  const total = d.total_unread || 0;
+  const greeting = d.first_login
+    ? `¡Bienvenido a bordo, ${firstName}! 🎉`
+    : `¡Bienvenido de vuelta, ${firstName}! 👋`;
+  const foldersHtml = (d.folders || []).map(f =>
+    `<span class="wm-folder"><span class="wm-folder-name">${esc(f.folder)}</span><b>${f.count}</b></span>`
+  ).join("");
+  const previewHtml = (d.preview || []).map(m =>
+    `<div class="wm-mail">
+      <div class="wm-mail-left">
+        <div class="wm-mail-from">${esc(m.from_name || m.from_email || "(remitente desconocido)")}</div>
+        <div class="wm-mail-subject">${esc(m.subject)}</div>
+      </div>
+      <div class="wm-mail-right">
+        <span class="wm-folder-tag">${esc(m.folder)}</span>
+        <span class="wm-mail-date">${fmtDt(m.date)}</span>
+      </div>
+    </div>`).join("");
+
+  const resumeHtml = d.last_login
+    ? `<div class="wm-resume">Este es tu resumen desde <b>${fmtDt(d.last_login)}</b>:</div>`
+    : `<div class="wm-resume">Este es tu resumen de pendientes al día de hoy:</div>`;
+
+  const bodyHtml = total === 0
+    ? `<div class="wm-clear">🎉 ¡Cero pendientes, ${firstName}! Tu bandeja está tan en paz que casi se oyen mariposas. Disfrútalo mientras dure. 🦋</div>`
+    : `${resumeHtml}
+      <div class="wm-stats">
+        <div class="wm-stat main"><div class="wm-num">${total}</div><div>correos sin leer</div></div>
+        <div class="wm-stat"><div class="wm-num">${(d.folders || []).length}</div><div>carpetas</div></div>
+        <div class="wm-stat"><div class="wm-num">${(d.preview || []).length}</div><div>recientes</div></div>
+      </div>
+      ${foldersHtml ? `<div class="wm-folders">${foldersHtml}</div>` : ""}
+      ${previewHtml ? `<div class="wm-section">Recientes sin leer:</div><div class="wm-preview">${previewHtml}</div>` : ""}`;
+
+  openModal(`
+    <div class="welcome-modal">
+      <div class="wm-hero">${greeting}</div>
+      <div class="wm-slogan">${welcomeLine(firstName, total)}</div>
+      ${bodyHtml}
+      <div class="actions">
+        <button class="btn-primary btn" id="wm-close">${total ? "¡A trabajar! 💪" : "¡Perfecto! ✅"}</button>
+      </div>
+    </div>`, "modal-wide");
+  document.getElementById("wm-close").onclick = closeModal;
+}
+
+/* ============================================================ shell */
 async function boot() {
   try {
     await loadAccounts();
@@ -177,6 +271,7 @@ async function boot() {
     renderShell();
     startNotifications();
     startFolderRefresh();
+    maybeShowWelcome();
   } catch (e) {
     toast(e.message, "error");
   }

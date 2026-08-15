@@ -274,15 +274,120 @@ def login(payload: LoginPayload):
     if not row:
         raise HTTPException(401, "Usuario o contraseña incorrectos")
     token = create_token(row["Id"], row["Email"], row["Nombre"])
+    last_login = _record_login(row["Id"])
     return {
         "token": token,
         "user": {"id": row["Id"], "email": row["Email"], "name": row["Nombre"]},
+        "last_login": last_login,
     }
+
+
+def _record_login(user_id: int):
+    """Guarda la fecha del inicio de sesión y devuelve la anterior (si existe)."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT LastLogin FROM HUBMAIL_UserMeta WHERE UserID=%s", (user_id,))
+        prev = cur.fetchone()
+        last_login = prev["LastLogin"] if prev else None
+        if prev:
+            cur.execute(
+                "UPDATE HUBMAIL_UserMeta SET LastLogin=GETDATE() WHERE UserID=%s",
+                (user_id,),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO HUBMAIL_UserMeta (UserID, LastLogin) VALUES (%s, GETDATE())",
+                (user_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return last_login
 
 
 @app.get("/api/auth/me")
 def me(user=Depends(get_current_user)):
     return {**user, "is_admin": is_admin(user)}
+
+
+# ---------------------------------------------------------------- resumen de bienvenida
+_EXCLUDED_FOLDER_PARTS = [
+    "archiv", "spam", "junk", "bulk", "trash", "deleted",
+    "papelera", "basura", "borrado", "sent", "enviado", "draft", "borrador",
+]
+
+
+def _is_excluded_folder(folder: str) -> bool:
+    low = (folder or "").lower()
+    return any(p in low for p in _EXCLUDED_FOLDER_PARTS)
+
+
+@app.get("/api/welcome")
+def welcome_summary(user=Depends(get_current_user)):
+    ids, _ = _account_ids_for(user)
+    if not ids:
+        return {"first_login": False, "last_login": None, "total_unread": 0, "folders": [], "preview": []}
+    ph = ",".join(["%s"] * len(ids))
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT LastLogin FROM HUBMAIL_UserMeta WHERE UserID=%s", (user["id"],))
+        row = cur.fetchone()
+        last_login = row["LastLogin"] if row else None
+        cur.execute(
+            "SELECT Folder, COUNT(*) AS N FROM HUBMAIL_Messages "
+            f"WHERE AccountID IN ({ph}) AND Seen=0 GROUP BY Folder",
+            tuple(ids),
+        )
+        grouped = cur.fetchall()
+        folders = [
+            {"folder": r["Folder"], "count": r["N"]}
+            for r in grouped
+            if not _is_excluded_folder(r["Folder"])
+        ]
+        folders.sort(key=lambda f: f["count"], reverse=True)
+        total = sum(f["count"] for f in folders)
+        cur.execute(
+            "SELECT TOP 8 m.UID, m.Folder, m.Subject, m.FromEmail, m.FromName, "
+            "m.DateSent AS MsgDate, m.AccountID "
+            "FROM HUBMAIL_Messages m "
+            f"WHERE m.AccountID IN ({ph}) AND m.Seen=0 "
+            "AND NOT (m.Folder LIKE '%%Archiv%%' OR m.Folder LIKE '%%Spam%%' "
+            "OR m.Folder LIKE '%%Junk%%' OR m.Folder LIKE '%%Bulk%%' "
+            "OR m.Folder LIKE '%%Trash%%' OR m.Folder LIKE '%%Deleted%%' "
+            "OR m.Folder LIKE '%%Papelera%%' OR m.Folder LIKE '%%Basura%%' "
+            "OR m.Folder LIKE '%%Borrad%%' OR m.Folder LIKE 'Sent%%' "
+            "OR m.Folder LIKE '%%Enviad%%' OR m.Folder LIKE 'Draft%%') "
+            "ORDER BY m.DateSent DESC",
+            tuple(ids),
+        )
+        preview_rows = cur.fetchall()
+        cur.execute(
+            f"SELECT AccountID, EmailAddress FROM HUBMAIL_Accounts WHERE AccountID IN ({ph})",
+            tuple(ids),
+        )
+        emails = {r["AccountID"]: r["EmailAddress"] for r in cur.fetchall()}
+        preview = []
+        for r in preview_rows:
+            preview.append({
+                "uid": str(r["UID"]),
+                "folder": r["Folder"],
+                "subject": r["Subject"] or "(sin asunto)",
+                "from_name": r["FromName"] or "",
+                "from_email": r["FromEmail"] or "",
+                "date": r["MsgDate"],
+                "account": emails.get(r["AccountID"], ""),
+            })
+        return {
+            "first_login": last_login is None,
+            "last_login": last_login,
+            "total_unread": total,
+            "folders": folders[:12],
+            "preview": preview,
+        }
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------- cuentas
