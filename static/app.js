@@ -25,6 +25,8 @@ const state = {
   collapsedAccounts: new Set(),
 };
 
+let dragData = null;
+
 const ACC_FALLBACK_COLORS = [
   "#2a6fd6", "#8e44ad", "#d63031", "#0984e3", "#00b894", "#e17055",
   "#e84393", "#6c5ce7", "#00cec9", "#e67e22", "#d35400", "#16a085",
@@ -392,7 +394,7 @@ function messagesHtml() {
     const sender = from ? (from.name || from.email) : "?";
     const sel = state.selected.has(m.id);
     return `
-      <div class="msg-item ${m.unread ? "unread" : ""} ${sel ? "selected" : ""}" data-id="${esc(m.id)}">
+      <div class="msg-item ${m.unread ? "unread" : ""} ${sel ? "selected" : ""}" data-id="${esc(m.id)}" draggable="true">
         <input type="checkbox" class="msg-check" data-id="${esc(m.id)}" ${sel ? "checked" : ""}>
         <div class="msg-main">
           <div class="row1">
@@ -426,6 +428,16 @@ function bindMessageList() {
       clearTimeout(el._t);
       openMessageModal(id);
     };
+    el.addEventListener("dragstart", e => {
+      dragData = { accountId: state.currentAccountId, folder: state.currentFolder, uid: id };
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", id);
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => {
+      el.classList.remove("dragging");
+      dragData = null;
+    });
   });
   document.querySelectorAll(".msg-check").forEach(cb => {
     cb.onclick = (e) => {
@@ -662,6 +674,68 @@ function renderSidebar() {
       renderSidebar();
     };
   });
+  bindDropTargets(sb);
+}
+
+function bindDropTargets(sb) {
+  const mark = (el, on) => {
+    const item = el.closest ? el.closest(".fitem, .account-head") : null;
+    if (item) item.classList.toggle("drop-target", on);
+  };
+  sb.querySelectorAll('[data-folder]').forEach(el => {
+    el.addEventListener("dragover", e => { if (dragData) { e.preventDefault(); e.stopPropagation(); mark(el, true); } });
+    el.addEventListener("dragleave", () => mark(el, false));
+    el.addEventListener("drop", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      mark(el, false);
+      if (dragData) doMoveDrop(el.closest("[data-acc]").dataset.acc, el.dataset.folder);
+    });
+  });
+  sb.querySelectorAll(".account-head").forEach(el => {
+    el.addEventListener("dragover", e => { if (dragData) { e.preventDefault(); e.stopPropagation(); mark(el, true); } });
+    el.addEventListener("dragleave", () => mark(el, false));
+    el.addEventListener("drop", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      mark(el, false);
+      if (dragData) doMoveDrop(el.dataset.acc, "INBOX");
+    });
+  });
+}
+
+async function doMoveDrop(destAccId, destFolder) {
+  if (!dragData) return;
+  destAccId = parseInt(destAccId);
+  const src = dragData;
+  dragData = null;
+  if (destAccId === src.accountId && destFolder === src.folder) {
+    return toast("El mensaje ya está en esa carpeta", "error");
+  }
+  const uids = state.selected.has(src.uid) ? Array.from(state.selected) : [src.uid];
+  showLoading("Moviendo mensaje…");
+  try {
+    await api("/messages/move", {
+      method: "POST",
+      body: JSON.stringify({
+        source_account_id: src.accountId,
+        dest_account_id: destAccId,
+        folder: src.folder,
+        dest_folder: destFolder,
+        uids,
+      }),
+    });
+    state.selected.clear();
+    toast(uids.length === 1 ? "Mensaje movido" : `${uids.length} mensajes movidos`, "ok");
+    await loadMessages();
+    await loadUnreadCounts();
+    renderSidebar();
+    renderContent();
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    hideLoading();
+  }
 }
 
 function renderContent() {

@@ -195,6 +195,14 @@ class BulkDeletePayload(BaseModel):
     ids: list[str]
 
 
+class MoveMessagesPayload(BaseModel):
+    source_account_id: int
+    dest_account_id: int
+    folder: str
+    dest_folder: str
+    uids: list[str]
+
+
 class ContactPayload(BaseModel):
     name: str
     email: str
@@ -914,13 +922,115 @@ def _db_delete_messages(account_id, folder, uids):
         conn.close()
 
 
-def _db_move_message(account_id, folder, uid, dest):
+def _db_get_message_id(account_id, folder, uid):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT MessageIdHeader FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (account_id, folder, uid),
+        )
+        row = cur.fetchone()
+        return row["MessageIdHeader"] if row else None
+    finally:
+        conn.close()
+
+
+def _db_move_message(account_id, folder, uid, dest, new_uid=None):
     conn = get_conn()
     try:
         cur = conn.cursor()
+        if new_uid:
+            cur.execute(
+                "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (account_id, dest, new_uid),
+            )
+            cur.execute(
+                "UPDATE HUBMAIL_Messages SET Folder=%s, UID=%s "
+                "WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (dest, new_uid, account_id, folder, uid),
+            )
+        else:
+            cur.execute(
+                "UPDATE HUBMAIL_Messages SET Folder=%s WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (dest, account_id, folder, uid),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@app.post("/api/messages/move")
+def move_messages(payload: MoveMessagesPayload, user=Depends(get_current_user)):
+    if not payload.uids:
+        raise HTTPException(400, "No hay mensajes para mover")
+    src = _canonical_row(_get_account(user, payload.source_account_id))
+    dst = _canonical_row(_get_account(user, payload.dest_account_id))
+    src_id, dst_id = src["AccountID"], dst["AccountID"]
+
+    if src_id == dst_id:
+        try:
+            with _imap_for(src) as imap:
+                for uid in payload.uids:
+                    msgid = _db_get_message_id(src_id, payload.folder, int(uid))
+                    imap.move_message(payload.folder, uid, payload.dest_folder)
+                    new_uid = None
+                    if msgid:
+                        new_uid = imap.find_uid_by_message_id(payload.dest_folder, msgid)
+                    if not new_uid:
+                        new_uid = imap.last_uid(payload.dest_folder)
+                    _db_move_message(src_id, payload.folder, int(uid), payload.dest_folder, int(new_uid) if new_uid else None)
+        except IMAPError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "moved": len(payload.uids), "cross": False}
+
+    moved = 0
+    try:
+        with _imap_for(src) as simap, _imap_for(dst) as dimap:
+            for uid in payload.uids:
+                raw, flags = simap.fetch_raw_with_flags(payload.folder, uid)
+                new_uid = dimap.append_message(payload.dest_folder, raw, flags)
+                simap.delete_message(payload.folder, uid)
+                seen = 1 if "\\Seen" in flags else 0
+                _db_cross_move_message(
+                    src_id, payload.folder, int(uid),
+                    dst_id, payload.dest_folder, int(new_uid), seen,
+                )
+                moved += 1
+    except IMAPError as e:
+        raise HTTPException(400, f"No se pudo mover entre cuentas: {e}")
+    return {"ok": True, "moved": moved, "cross": True}
+
+
+def _db_cross_move_message(src_account_id, src_folder, uid, dst_account_id, dst_folder, new_uid, seen):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
         cur.execute(
-            "UPDATE HUBMAIL_Messages SET Folder=%s WHERE AccountID=%s AND Folder=%s AND UID=%s",
-            (dest, account_id, folder, uid),
+            "SELECT MessageIdHeader, InReplyTo, FromName, FromEmail, ToText, CcText, Subject, "
+            "DateSent, Answered, Flagged, HasAttachments, BodyHtml, BodyText, Size, Spam, SenderIP "
+            "FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (src_account_id, src_folder, uid),
+        )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (dst_account_id, dst_folder, new_uid),
+            )
+            cur.execute(
+                "INSERT INTO HUBMAIL_Messages (AccountID, Folder, UID, MessageIdHeader, InReplyTo, "
+                "FromName, FromEmail, ToText, CcText, Subject, DateSent, Seen, Answered, Flagged, "
+                "HasAttachments, BodyHtml, BodyText, Size, Spam, SenderIP) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (dst_account_id, dst_folder, new_uid, row["MessageIdHeader"], row["InReplyTo"],
+                 row["FromName"], row["FromEmail"], row["ToText"], row["CcText"], row["Subject"],
+                 row["DateSent"], seen, row["Answered"], row["Flagged"], row["HasAttachments"],
+                 row["BodyHtml"], row["BodyText"], row["Size"], row["Spam"], row["SenderIP"]),
+            )
+        cur.execute(
+            "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (src_account_id, src_folder, uid),
         )
         conn.commit()
     finally:

@@ -289,6 +289,58 @@ class IMAPClient:
         finally:
             self.close()
 
+    def fetch_raw_with_flags(self, folder, msgid):
+        conn = self._connect()
+        try:
+            conn.select(_q(_utf7_encode(folder)), readonly=True)
+            typ, d = conn.uid("fetch", msgid, "(FLAGS RFC822)")
+            if typ != "OK" or not d or not isinstance(d[0], tuple):
+                raise IMAPError("Mensaje no encontrado")
+            meta = d[0][0].decode("utf-8", "replace")
+            raw = d[0][1]
+            flags = _FLAGS_RE.search(meta)
+            flags = set(flags.group(1).split()) if flags else set()
+            return raw, flags
+        finally:
+            self.close()
+
+    def append_message(self, folder, raw, flags=None):
+        conn = self._connect()
+        try:
+            flags_str = " ".join(f for f in (flags or []) if f in ("\\Seen", "\\Flagged"))
+            typ, _ = conn.append(_utf7_encode(folder), flags_str, None, raw)
+            if typ != "OK":
+                raise IMAPError("No se pudo copiar a la carpeta destino")
+            conn.select(_q(_utf7_encode(folder)), readonly=True)
+            typ, data = conn.uid("search", None, "ALL")
+            if typ != "OK" or not data or not data[0]:
+                raise IMAPError("No se pudo obtener el UID del mensaje copiado")
+            return data[0].split()[-1].decode()
+        finally:
+            self.close()
+
+    def find_uid_by_message_id(self, folder, message_id):
+        conn = self._connect()
+        try:
+            conn.select(_q(_utf7_encode(folder)), readonly=True)
+            typ, data = conn.uid("search", None, "HEADER", "Message-ID", _q(message_id))
+            if typ == "OK" and data and data[0]:
+                return data[0].split()[0].decode()
+        finally:
+            self.close()
+        return None
+
+    def last_uid(self, folder):
+        conn = self._connect()
+        try:
+            conn.select(_q(_utf7_encode(folder)), readonly=True)
+            typ, data = conn.uid("search", None, "ALL")
+            if typ == "OK" and data and data[0]:
+                return data[0].split()[-1].decode()
+        finally:
+            self.close()
+        return None
+
     def delete_message(self, folder, msgid):
         conn = self._connect()
         try:

@@ -246,6 +246,12 @@ aside {
 .folders li .unread-count { color: var(--danger); font-weight: 700; font-size: 11px; }
 .folders li.active .unread-count { color: #ffd166; }
 .side-actions { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.msg-item.dragging { opacity: .5; }
+.fitem.drop-target, .account-head.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: #e8f1ff;
+}
 
 /* ---------- content ---------- */
 main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
