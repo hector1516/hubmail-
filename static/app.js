@@ -1055,7 +1055,7 @@ async function openContactsManager(pickMode = false) {
   hideLoading();
   const rows = [];
   (data.users || []).forEach(u => rows.push({ kind: "user", name: u.name, email: u.email }));
-  (data.addressbook || []).forEach(a => rows.push({ kind: "auto", name: a.name || a.email, email: a.email }));
+  (data.addressbook || []).forEach(a => rows.push({ kind: "auto", id: a.id, name: a.name || a.email, email: a.email }));
   (data.contacts || []).forEach(c => rows.push({ kind: "saved", id: c.id, name: c.name, email: c.email }));
 
   const originBadge = kind =>
@@ -1093,9 +1093,9 @@ async function openContactsManager(pickMode = false) {
     tbody.innerHTML = filtered.map(r => {
       const actions = [];
       if (pickMode) actions.push(`<button class="btn-ghost btn btn-sm" data-act="use" data-email="${esc(r.email)}">Usar</button>`);
-      if (r.kind === "saved") {
-        actions.push(`<button class="btn-ghost btn btn-sm" data-act="edit" data-id="${r.id}" title="Editar">✎</button>`);
-        actions.push(`<button class="btn-danger btn btn-sm" data-act="del" data-id="${r.id}" title="Eliminar">🗑</button>`);
+      if (r.kind !== "user") {
+        actions.push(`<button class="btn-ghost btn btn-sm" data-act="edit" data-kind="${r.kind}" data-id="${r.id}" title="Editar">✎</button>`);
+        actions.push(`<button class="btn-danger btn btn-sm" data-act="del" data-kind="${r.kind}" data-id="${r.id}" title="Eliminar">🗑</button>`);
       }
       return `<tr>
         <td class="td-name">${esc(r.name)}</td>
@@ -1115,12 +1115,17 @@ async function openContactsManager(pickMode = false) {
   tbody.addEventListener("click", e => {
     const btn = e.target.closest("[data-act]");
     if (!btn) return;
-    const { act, email, id } = btn.dataset;
+    const { act, email, id, kind } = btn.dataset;
     if (act === "use") { closeModal(); useContact(email); }
-    else if (act === "edit") openContactForm(data.contacts.find(x => x.id === parseInt(id)), pickMode);
+    else if (act === "edit") {
+      const row = rows.find(r => r.id === parseInt(id));
+      if (kind === "auto") openContactForm({ kind: "auto", id: parseInt(id), name: row?.name, email: row?.email }, pickMode);
+      else openContactForm(data.contacts.find(x => x.id === parseInt(id)), pickMode);
+    }
     else if (act === "del") {
-      if (!confirm("¿Eliminar este contacto?")) return;
-      api(`/contacts/${id}`, { method: "DELETE" })
+      if (!confirm(`¿Eliminar este ${kind === "auto" ? "contacto recopilado" : "contacto"}?`)) return;
+      const url = kind === "auto" ? `/addressbook/${id}` : `/contacts/${id}`;
+      api(url, { method: "DELETE" })
         .then(() => { toast("Contacto eliminado", "ok"); openContactsManager(pickMode); })
         .catch(e => toast(e.message, "error"));
     }
@@ -1128,12 +1133,14 @@ async function openContactsManager(pickMode = false) {
 }
 
 function openContactForm(c, pickMode) {
+  const isAuto = c && c.kind === "auto";
   openModal(`
-    <h2>${c ? "Editar contacto" : "Nuevo contacto"}</h2>
+    <h2>${isAuto ? "Editar contacto recopilado" : c ? "Editar contacto" : "Nuevo contacto"}</h2>
+    ${isAuto ? '<p class="admin-hint">Solo puedes cambiar el nombre. El correo se recopila automáticamente de tus mensajes.</p>' : ""}
     <div class="field"><label>Nombre</label><input id="cf-name" value="${esc(c?.name || "")}"></div>
-    <div class="field"><label>Email</label><input id="cf-email" value="${esc(c?.email || "")}"></div>
-    <div class="field"><label>Teléfono</label><input id="cf-phone" value="${esc(c?.phone || "")}"></div>
-    <div class="field"><label>Notas</label><textarea id="cf-notes">${esc(c?.notes || "")}</textarea></div>
+    <div class="field"><label>Email</label><input id="cf-email" value="${esc(c?.email || "")}" ${isAuto ? "readonly" : ""}></div>
+    ${isAuto ? "" : `<div class="field"><label>Teléfono</label><input id="cf-phone" value="${esc(c?.phone || "")}"></div>
+    <div class="field"><label>Notas</label><textarea id="cf-notes">${esc(c?.notes || "")}</textarea></div>`}
     <div class="actions">
       <button class="btn-ghost btn" id="cf-cancel">Cancelar</button>
       <button class="btn-primary btn" id="cf-save">Guardar</button>
@@ -1143,12 +1150,13 @@ function openContactForm(c, pickMode) {
     const payload = {
       name: document.getElementById("cf-name").value.trim(),
       email: document.getElementById("cf-email").value.trim(),
-      phone: document.getElementById("cf-phone").value.trim(),
-      notes: document.getElementById("cf-notes").value.trim(),
+      phone: (document.getElementById("cf-phone")?.value || "").trim(),
+      notes: (document.getElementById("cf-notes")?.value || "").trim(),
     };
     if (!payload.name || !payload.email) return toast("Nombre y email son obligatorios", "error");
     try {
-      if (c) await api(`/contacts/${c.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      if (isAuto) await api(`/addressbook/${c.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      else if (c) await api(`/contacts/${c.id}`, { method: "PUT", body: JSON.stringify(payload) });
       else await api("/contacts", { method: "POST", body: JSON.stringify(payload) });
       toast("Contacto guardado", "ok");
     } catch (e) { toast(e.message, "error"); }

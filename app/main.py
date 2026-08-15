@@ -1268,11 +1268,12 @@ def list_contacts(user=Depends(get_current_user)):
                 "notes": r["Notes"] or "",
             })
         cur.execute(
-            "SELECT Email, Name FROM HUBMAIL_AddressBook WHERE UserID=%s ORDER BY Name",
+            "SELECT EntryID, Email, Name FROM HUBMAIL_AddressBook WHERE UserID=%s ORDER BY Name",
             (user["id"],),
         )
         addressbook = [
-            {"email": r["Email"], "name": r["Name"] or ""} for r in cur.fetchall()
+            {"id": r["EntryID"], "email": r["Email"], "name": r["Name"] or ""}
+            for r in cur.fetchall()
         ]
         return {"users": users, "contacts": contacts, "addressbook": addressbook}
     finally:
@@ -1322,6 +1323,36 @@ def delete_contact(contact_id: int, user=Depends(get_current_user)):
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM HUBMAIL_Contacts WHERE ContactID=%s", (contact_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.put("/api/addressbook/{entry_id}")
+def update_addressbook(entry_id: int, payload: ContactPayload, user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE HUBMAIL_AddressBook SET Name=%s WHERE EntryID=%s AND UserID=%s",
+            (payload.name, entry_id, user["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/addressbook/{entry_id}")
+def delete_addressbook(entry_id: int, user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM HUBMAIL_AddressBook WHERE EntryID=%s AND UserID=%s",
+            (entry_id, user["id"]),
+        )
         conn.commit()
     finally:
         conn.close()
