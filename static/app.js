@@ -243,11 +243,14 @@ function showWelcome(d) {
       ${foldersHtml ? `<div class="wm-folders">${foldersHtml}</div>` : ""}
       ${previewHtml ? `<div class="wm-section">Recientes sin leer:</div><div class="wm-preview">${previewHtml}</div>` : ""}`;
 
+  const noteHtml = `<div class="wm-note">🧹 Nota del sistema: Spam, Basura y Papelera se autolimpian cada día, como buenos ciudadanos. Ahí solo viven los últimos 10 correos y nada mayor a una semana. La limpieza es cortesía de HUBMail; el resto es tu problema. 😌</div>`;
+
   openModal(`
     <div class="welcome-modal">
       <div class="wm-hero">${greeting}</div>
       <div class="wm-slogan">${welcomeLine(firstName, total)}</div>
       ${bodyHtml}
+      ${noteHtml}
       <div class="actions">
         <button class="btn-primary btn" id="wm-close">${total ? "¡A trabajar! 💪" : "¡Perfecto! ✅"}</button>
       </div>

@@ -20,6 +20,13 @@ from .imap_client import (
 
 SYNC_INTERVAL = 300  # 5 minutos
 
+RETENTION_MAX_KEEP = 10
+RETENTION_MAX_DAYS = 7
+RETENTION_FOLDER_PARTS = [
+    "junk", "spam", "bulk", "trash", "deleted",
+    "papelera", "basura", "no deseado", "elementos eliminados", "correo no deseado",
+]
+
 _locks_guard = threading.Lock()
 _folder_locks = {}
 _account_cooldown = {}
@@ -47,6 +54,14 @@ def _safe(value):
         return value
     except UnicodeEncodeError:
         return value.encode("cp1252", "ignore").decode("cp1252")
+
+
+def _data_hex(value):
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    return value
 
 
 def _addr_json(items):
@@ -258,10 +273,10 @@ def _replace_attachments(account_id, folder, uid, items):
         )
         cur.executemany(
             "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,CONVERT(VARBINARY(MAX),%s,2))",
             [
                 (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]), _safe(a["cid"]),
-                 a["size"], a["data"])
+                 a["size"], _data_hex(a["data"]))
                 for a in items
             ],
         )
@@ -350,7 +365,7 @@ def _insert_many(account_id, folder, items):
             for a in p["attachment_items"]:
                 att_rows.append(
                     (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]),
-                     _safe(a["cid"]), a["size"], a["data"])
+                     _safe(a["cid"]), a["size"], _data_hex(a["data"]))
                 )
         if not data:
             return 0
@@ -379,7 +394,7 @@ def _insert_many(account_id, folder, items):
             try:
                 cur.executemany(
                     "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,CONVERT(VARBINARY(MAX),%s,2))",
                     att_rows,
                 )
                 conn.commit()
@@ -391,7 +406,7 @@ def _insert_many(account_id, folder, items):
                     try:
                         cur.execute(
                             "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,CONVERT(VARBINARY(MAX),%s,2))",
                             row,
                         )
                     except Exception as e2:
@@ -432,7 +447,7 @@ def _update_body_many(account_id, folder, items):
             for a in p["attachment_items"]:
                 att_rows.append(
                     (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]),
-                     _safe(a["cid"]), a["size"], a["data"])
+                     _safe(a["cid"]), a["size"], _data_hex(a["data"]))
                 )
         if not data:
             return 0
@@ -582,6 +597,72 @@ def sync_folder(account_id, folder, force=False, with_bodies=True):
         imap.close()
 
 
+def _is_retention_folder(folder):
+    low = (folder or "").lower()
+    return any(p in low for p in RETENTION_FOLDER_PARTS)
+
+
+def _run_retention(account_id, imap):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT LastRun FROM HUBMAIL_Retention WHERE AccountID=%s", (account_id,))
+        row = cur.fetchone()
+        if row and row["LastRun"]:
+            if (datetime.now() - row["LastRun"]).total_seconds() < 86400:
+                return {"skipped": True}
+        cur.execute("SELECT Folder FROM HUBMAIL_Folders WHERE AccountID=%s", (account_id,))
+        target_folders = [r["Folder"] for r in cur.fetchall() if _is_retention_folder(r["Folder"])]
+        if not target_folders:
+            _upsert_retention(cur, account_id)
+            conn.commit()
+            return {"folders": 0, "deleted": 0}
+        cutoff = datetime.now() - timedelta(days=RETENTION_MAX_DAYS)
+        deleted_total = 0
+        for folder in target_folders:
+            cur.execute(
+                "SELECT UID, DateSent FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s",
+                (account_id, folder),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                continue
+            rows.sort(key=lambda r: (r["DateSent"] or datetime.min), reverse=True)
+            keep = rows[:RETENTION_MAX_KEEP]
+            keep_ids = set(int(r["UID"]) for r in keep if (r["DateSent"] or datetime.min) >= cutoff)
+            to_delete = [r for r in rows if int(r["UID"]) not in keep_ids]
+            if not to_delete:
+                continue
+            try:
+                imap.delete_messages(folder, [str(int(r["UID"])) for r in to_delete])
+            except Exception as e:
+                print(f"[RETENTION] imap {account_id}/{folder}: {e}", flush=True)
+            for r in to_delete:
+                uid = int(r["UID"])
+                cur.execute(
+                    "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                    (account_id, folder, uid),
+                )
+                cur.execute(
+                    "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                    (account_id, folder, uid),
+                )
+            deleted_total += len(to_delete)
+        _upsert_retention(cur, account_id)
+        conn.commit()
+        return {"folders": len(target_folders), "deleted": deleted_total}
+    finally:
+        conn.close()
+
+
+def _upsert_retention(cur, account_id):
+    cur.execute("SELECT 1 FROM HUBMAIL_Retention WHERE AccountID=%s", (account_id,))
+    if cur.fetchone():
+        cur.execute("UPDATE HUBMAIL_Retention SET LastRun=GETDATE() WHERE AccountID=%s", (account_id,))
+    else:
+        cur.execute("INSERT INTO HUBMAIL_Retention (AccountID, LastRun) VALUES (%s, GETDATE())", (account_id,))
+
+
 def _save_folders(account_id, delimiter, folders):
     conn = get_conn()
     try:
@@ -627,6 +708,12 @@ def sync_account(account_id):
                 print(f"[SYNC] error folder {account_id}/{f['name']}: {e}", flush=True)
                 imap.close()
                 continue
+        try:
+            retention = _run_retention(account_id, imap)
+            if retention and not retention.get("skipped"):
+                print(f"[RETENTION] {account_id}: {retention}", flush=True)
+        except Exception as e:
+            print(f"[RETENTION] error {account_id}: {e}", flush=True)
     finally:
         imap.close()
         _account_busy[account_id] = False

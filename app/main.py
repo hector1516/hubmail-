@@ -1077,10 +1077,10 @@ def _db_cross_move_message(src_account_id, src_folder, uid, dst_account_id, dst_
             if atts:
                 cur.executemany(
                     "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,CONVERT(VARBINARY(MAX),%s,2))",
                     [
                         (dst_account_id, dst_folder, new_uid, a["Name"], a["ContentType"], a["Cid"],
-                         a["Size"], a["Data"])
+                         a["Size"], a["Data"].hex())
                         for a in atts
                     ],
                 )

@@ -1,0 +1,7 @@
+IF OBJECT_ID('HUBMAIL_Retention','U') IS NULL
+BEGIN
+    CREATE TABLE HUBMAIL_Retention (
+        AccountID INT NOT NULL PRIMARY KEY,
+        LastRun DATETIME NULL
+    );
+END;
