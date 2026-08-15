@@ -1011,14 +1011,42 @@ function openContactForm(c, pickMode) {
 
 /* ============================================================ accounts */
 function openAccountsModal() {
+  const isAdmin = state.user && state.user.is_admin;
+  if (isAdmin) return openAdminAccounts();
   const rows = state.accounts.map(a => `
     <div class="contact-item">
       <div><b>${esc(a.email)}</b><div class="c-email">${esc(a.display_name || "")} · ${a.is_default ? "predeterminada" : ""}</div></div>
-      <div><button class="btn-ghost btn btn-sm" data-edit="${a.id}">Editar</button></div>
     </div>`).join("");
   openModal(`
-    <h2>Cuentas de correo</h2>
-    <div>${rows || `<div class="empty">Sin cuentas</div>`}</div>
+    <h2>Mis cuentas</h2>
+    <div>${rows || `<div class="empty">Sin cuentas asignadas</div>`}</div>
+    <div class="admin-hint">Para agregar o modificar cuentas, contacta al administrador.</div>
+    <div class="actions">
+      <button class="btn-ghost btn" id="acc-close">Cerrar</button>
+      <button class="btn-ghost btn" id="acc-sig">✍️ Firma personal</button>
+      <button class="btn-ghost btn" id="acc-filt">📁 Filtros</button>
+    </div>`);
+  document.getElementById("acc-close").onclick = closeModal;
+  document.getElementById("acc-sig").onclick = openSignatureForm;
+  document.getElementById("acc-filt").onclick = openFiltersManager;
+}
+
+async function openAdminAccounts() {
+  let list = [];
+  try { list = await api("/admin/accounts"); } catch (e) { return toast(e.message, "error"); }
+  const rows = list.map(a => `
+    <div class="contact-item">
+      <div><b>${esc(a.email)}</b><div class="c-email">${esc(a.display_name || "")} · ${a.assigned_users.length} usuario(s)</div></div>
+      <div>
+        <button class="btn-ghost btn btn-sm" data-assign="${a.id}">👥 Asignar</button>
+        <button class="btn-ghost btn btn-sm" data-edit="${a.id}">Editar</button>
+        <button class="btn-danger btn btn-sm" data-del="${a.id}">🗑</button>
+      </div>
+    </div>`).join("");
+  openModal(`
+    <h2>Administración de cuentas</h2>
+    <div class="admin-hint">Tú eliges qué cuentas de correo tiene disponible cada usuario.</div>
+    <div>${rows || `<div class="empty">Sin cuentas todavía</div>`}</div>
     <div class="actions">
       <button class="btn-ghost btn" id="acc-close">Cerrar</button>
       <button class="btn-ghost btn" id="acc-sig">✍️ Firma personal</button>
@@ -1032,6 +1060,49 @@ function openAccountsModal() {
   document.querySelectorAll("[data-edit]").forEach(b => {
     b.onclick = () => openAccountForm(parseInt(b.dataset.edit));
   });
+  document.querySelectorAll("[data-assign]").forEach(b => {
+    b.onclick = () => openAssignUsers(parseInt(b.dataset.assign));
+  });
+  document.querySelectorAll("[data-del]").forEach(b => {
+    b.onclick = async () => {
+      if (!confirm("¿Eliminar esta cuenta y quitar el acceso a todos los usuarios?")) return;
+      try {
+        await api(`/accounts/${b.dataset.del}`, { method: "DELETE" });
+        toast("Cuenta eliminada", "ok");
+      } catch (e) { toast(e.message, "error"); }
+      openAdminAccounts();
+    };
+  });
+}
+
+async function openAssignUsers(accountId) {
+  let users = [], list = [];
+  try {
+    [users, list] = await Promise.all([api("/admin/users"), api("/admin/accounts")]);
+  } catch (e) { return toast(e.message, "error"); }
+  const acc = list.find(a => a.id === accountId);
+  if (!acc) return toast("Cuenta no encontrada", "error");
+  const assigned = new Set(acc.assigned_users || []);
+  const rows = users.map(u => `
+    <div class="assign-row">
+      <label><input type="checkbox" class="u-check" value="${u.id}" ${assigned.has(u.id) ? "checked" : ""}> <b>${esc(u.name || u.email)}</b> <span class="c-email">${esc(u.email)}</span></label>
+    </div>`).join("");
+  openModal(`
+    <h2>Asignar usuarios · ${esc(acc.email)}</h2>
+    <div>${rows || `<div class="empty">Sin usuarios en el sistema</div>`}</div>
+    <div class="actions">
+      <button class="btn-ghost btn" id="as-cancel">Cancelar</button>
+      <button class="btn-primary btn" id="as-save">Guardar</button>
+    </div>`);
+  document.getElementById("as-cancel").onclick = openAdminAccounts;
+  document.getElementById("as-save").onclick = async () => {
+    const ids = [...document.querySelectorAll(".u-check:checked")].map(c => parseInt(c.value));
+    try {
+      await api(`/admin/accounts/${accountId}/assign`, { method: "POST", body: JSON.stringify({ user_ids: ids }) });
+      toast("Usuarios actualizados", "ok");
+    } catch (e) { toast(e.message, "error"); }
+    openAdminAccounts();
+  };
 }
 
 const PROVIDERS = [

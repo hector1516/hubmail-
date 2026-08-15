@@ -289,13 +289,12 @@ def list_accounts(user=Depends(get_current_user)):
 
 @app.post("/api/accounts")
 def create_account(payload: AccountPayload, user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador puede agregar cuentas")
+    admin_uid = get_admin_user_id() or user["id"]
     conn = get_conn()
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute("SELECT COUNT(*) AS N FROM HUBMAIL_Accounts WHERE UserID=%s", (user["id"],))
-        if cur.fetchone()["N"] >= MAX_ACCOUNTS:
-            raise HTTPException(400, f"Máximo {MAX_ACCOUNTS} cuentas por usuario")
-
         imap_host = payload.imap_host or settings.default_imap_host
         imap_port = payload.imap_port or settings.default_imap_port
         smtp_host = payload.smtp_host or settings.default_smtp_host
@@ -304,17 +303,17 @@ def create_account(payload: AccountPayload, user=Depends(get_current_user)):
 
         if payload.is_default:
             cur.execute(
-                "UPDATE HUBMAIL_Accounts SET IsDefault=0 WHERE UserID=%s", (user["id"],)
+                "UPDATE HUBMAIL_Accounts SET IsDefault=0 WHERE UserID=%s", (admin_uid,)
             )
         cur.execute(
             """
             INSERT INTO HUBMAIL_Accounts
                 (UserID, EmailAddress, DisplayName, IMAPHost, IMAPPort,
-                 SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, Phone, IsDefault)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,%s)
+                 SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, Phone, IsDefault, CanonicalAccountID)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,%s,NULL)
             """,
             (
-                user["id"], payload.email, payload.display_name,
+                admin_uid, payload.email, payload.display_name,
                 imap_host, imap_port, smtp_host, smtp_port,
                 username, encrypt_secret(payload.password),
                 1 if payload.is_default else 0,
@@ -323,42 +322,6 @@ def create_account(payload: AccountPayload, user=Depends(get_current_user)):
         conn.commit()
         cur.execute("SELECT @@IDENTITY AS Id")
         account_id = cur.fetchone()["Id"]
-
-        cur.execute(
-            """
-            SELECT TOP 1 ISNULL(CanonicalAccountID, AccountID) AS Cid
-            FROM HUBMAIL_Accounts
-            WHERE LOWER(EmailAddress)=LOWER(%s) AND LOWER(IMAPHost)=LOWER(%s)
-              AND LOWER(Username)=LOWER(%s) AND AccountID <> %s
-            ORDER BY AccountID
-            """,
-            (payload.email, imap_host, username, account_id),
-        )
-        row = cur.fetchone()
-        if row:
-            cur.execute(
-                "UPDATE HUBMAIL_Accounts SET CanonicalAccountID=%s WHERE AccountID=%s",
-                (row["Cid"], account_id),
-            )
-            conn.commit()
-
-        admin_uid = get_admin_user_id()
-        if admin_uid and admin_uid != user["id"]:
-            eff = row["Cid"] if row else account_id
-            cur.execute(
-                "SELECT COUNT(*) AS N FROM HUBMAIL_Accounts "
-                "WHERE UserID=%s AND EmailAddress=%s AND IMAPHost=%s AND Username=%s",
-                (admin_uid, payload.email, imap_host, username),
-            )
-            if cur.fetchone()["N"] == 0:
-                cur.execute(
-                    """INSERT INTO HUBMAIL_Accounts
-                       (UserID, EmailAddress, DisplayName, IMAPHost, IMAPPort, SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, Phone, IsDefault, CanonicalAccountID)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,0,%s)""",
-                    (admin_uid, payload.email, payload.display_name, imap_host, imap_port,
-                     smtp_host, smtp_port, username, encrypt_secret(payload.password), eff),
-                )
-                conn.commit()
     finally:
         conn.close()
 
@@ -415,6 +378,8 @@ def update_settings(payload: SettingsPayload, user=Depends(get_current_user)):
 
 @app.put("/api/accounts/{account_id}")
 def update_account(account_id: int, payload: AccountPayload, user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador puede editar cuentas")
     acc = _get_account(user, account_id)
     conn = get_conn()
     try:
@@ -447,6 +412,17 @@ def update_account(account_id: int, payload: AccountPayload, user=Depends(get_cu
                 password_enc, 1 if payload.is_default else 0, account_id, user["id"],
             ),
         )
+        cur.execute(
+            """UPDATE HUBMAIL_Accounts SET
+                 EmailAddress=%s, DisplayName=%s, IMAPHost=%s, IMAPPort=%s,
+                 SMTPHost=%s, SMTPPort=%s, Username=%s, PasswordEnc=%s
+               WHERE CanonicalAccountID=%s""",
+            (
+                payload.email, payload.display_name,
+                imap_host, imap_port, smtp_host, smtp_port, username,
+                password_enc, account_id,
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -457,41 +433,122 @@ def update_account(account_id: int, payload: AccountPayload, user=Depends(get_cu
 
 @app.delete("/api/accounts/{account_id}")
 def delete_account(account_id: int, user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador puede eliminar cuentas")
     _get_account(user, account_id)
     conn = get_conn()
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT AccountID FROM HUBMAIL_Accounts WHERE CanonicalAccountID=%s ORDER BY AccountID",
-            (account_id,),
+            "SELECT AccountID FROM HUBMAIL_Accounts WHERE AccountID=%s OR CanonicalAccountID=%s",
+            (account_id, account_id),
         )
-        linked = [r["AccountID"] for r in cur.fetchall()]
-        if linked:
-            promote = linked[0]
-            cur.execute("DELETE FROM HUBMAIL_Messages WHERE AccountID=%s", (promote,))
-            cur.execute("DELETE FROM HUBMAIL_SyncState WHERE AccountID=%s", (promote,))
-            cur.execute("DELETE FROM HUBMAIL_Unread WHERE AccountID=%s", (promote,))
+        ids = [r["AccountID"] for r in cur.fetchall()]
+        for tid in ids:
             for table in ("HUBMAIL_Messages", "HUBMAIL_SyncState", "HUBMAIL_Unread"):
-                cur.execute(
-                    f"UPDATE {table} SET AccountID=%s WHERE AccountID=%s",
-                    (promote, account_id),
-                )
-            cur.execute(
-                "UPDATE HUBMAIL_Accounts SET CanonicalAccountID=%s WHERE CanonicalAccountID=%s AND AccountID<>%s",
-                (promote, account_id, promote),
-            )
-            cur.execute(
-                "UPDATE HUBMAIL_Accounts SET CanonicalAccountID=NULL WHERE AccountID=%s",
-                (promote,),
-            )
+                cur.execute(f"DELETE FROM {table} WHERE AccountID=%s", (tid,))
         cur.execute(
-            "DELETE FROM HUBMAIL_Accounts WHERE AccountID=%s AND UserID=%s",
-            (account_id, user["id"]),
+            "DELETE FROM HUBMAIL_Accounts WHERE AccountID=%s OR CanonicalAccountID=%s",
+            (account_id, account_id),
         )
         conn.commit()
     finally:
         conn.close()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- administración (solo admin)
+@app.get("/api/admin/users")
+def admin_users(user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT Id, Email, Nombre, Activo FROM HUB_Users ORDER BY Nombre, Email")
+        return [
+            {"id": r["Id"], "email": r["Email"], "name": r["Nombre"], "active": bool(r["Activo"])}
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/accounts")
+def admin_accounts(user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    admin_uid = get_admin_user_id() or user["id"]
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT * FROM HUBMAIL_Accounts WHERE UserID=%s AND CanonicalAccountID IS NULL "
+            "ORDER BY EmailAddress",
+            (admin_uid,),
+        )
+        result = []
+        for m in cur.fetchall():
+            cur.execute(
+                "SELECT UserID FROM HUBMAIL_Accounts WHERE CanonicalAccountID=%s",
+                (m["AccountID"],),
+            )
+            d = _account_to_dict(m)
+            d["assigned_users"] = [r["UserID"] for r in cur.fetchall()]
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+class AssignPayload(BaseModel):
+    user_ids: list[int] = Field(default_factory=list)
+
+
+@app.post("/api/admin/accounts/{account_id}/assign")
+def assign_account(account_id: int, payload: AssignPayload, user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    admin_uid = get_admin_user_id() or user["id"]
+    master = _get_account(user, account_id)
+    if master.get("CanonicalAccountID"):
+        raise HTTPException(400, "No es una cuenta maestra")
+    desired = set(payload.user_ids)
+    desired.discard(admin_uid)
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT UserID FROM HUBMAIL_Accounts WHERE CanonicalAccountID=%s", (account_id,)
+        )
+        current = {r["UserID"] for r in cur.fetchall()}
+        for uid in desired - current:
+            cur.execute(
+                """INSERT INTO HUBMAIL_Accounts
+                   (UserID, EmailAddress, DisplayName, IMAPHost, IMAPPort, SMTPHost, SMTPPort,
+                    Username, PasswordEnc, SignatureHtml, Phone, IsDefault, CanonicalAccountID)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,0,%s)""",
+                (uid, master["EmailAddress"], master["DisplayName"], master["IMAPHost"],
+                 master["IMAPPort"], master["SMTPHost"], master["SMTPPort"], master["Username"],
+                 master["PasswordEnc"], account_id),
+            )
+            cur.execute(
+                "SELECT COUNT(*) AS N FROM HUBMAIL_Accounts WHERE UserID=%s", (uid,)
+            )
+            if cur.fetchone()["N"] == 1:
+                cur.execute(
+                    "UPDATE HUBMAIL_Accounts SET IsDefault=1 WHERE UserID=%s AND CanonicalAccountID=%s",
+                    (uid, account_id),
+                )
+        for uid in current - desired:
+            cur.execute(
+                "DELETE FROM HUBMAIL_Accounts WHERE UserID=%s AND CanonicalAccountID=%s",
+                (uid, account_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "assigned_users": sorted(desired)}
 
 
 @app.post("/api/accounts/{account_id}/test")
