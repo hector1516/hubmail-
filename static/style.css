@@ -374,11 +374,35 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 .cond-row select, .cond-row input { min-width: 0; }
 .cond-row .c-val { flex: 1; min-width: 120px; }
 
-.compose-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.compose-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; position: relative; }
 .compose-row label { width: 46px; color: var(--muted); font-size: 12px; }
 .compose-row .rec-check { width: auto; display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; cursor: pointer; }
 .compose-row .rec-check input { width: 15px; height: 15px; cursor: pointer; }
 .compose-row input { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 14px; }
+.ac-drop {
+  position: absolute;
+  z-index: 60;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin-top: 3px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.ac-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.ac-item:hover, .ac-item.active { background: var(--primary); color: #fff; }
+.ac-item.active .c-email, .ac-item:hover .c-email { color: rgba(255,255,255,.85); }
 #compose-body { width: 100%; min-height: 420px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; font-family: inherit; font-size: 14px; outline: none; overflow-y: auto; background: var(--card); }
 #compose-body:empty::before { content: attr(data-placeholder); color: #9aa4b2; pointer-events: none; }
 .attach-list { margin-top: 8px; }

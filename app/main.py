@@ -864,7 +864,37 @@ def send_message(account_id: int, payload: SendPayload, user=Depends(get_current
         )
     except SMTPError as e:
         raise HTTPException(400, str(e))
+    try:
+        _upsert_sent_recipients(user, payload)
+    except Exception:
+        pass
     return {"ok": True}
+
+
+def _upsert_sent_recipients(user, payload):
+    entries = {}
+    for addr in payload.to + payload.cc + payload.bcc:
+        e = addr.strip().lower()
+        if not e or not _valid_email(e):
+            continue
+        entries.setdefault(e, "")
+    if not entries:
+        return
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT Email FROM HUBMAIL_AddressBook WHERE UserID=%s", (user["id"],))
+        existing = {r["Email"].lower() for r in cur.fetchall()}
+        for email in entries:
+            if email in existing:
+                continue
+            cur.execute(
+                "INSERT INTO HUBMAIL_AddressBook (UserID, Email, Name) VALUES (%s,%s,NULL)",
+                (user["id"], email),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 @app.get("/api/wallpaper")
@@ -1237,7 +1267,14 @@ def list_contacts(user=Depends(get_current_user)):
                 "phone": r["Phone"] or "",
                 "notes": r["Notes"] or "",
             })
-        return {"users": users, "contacts": contacts}
+        cur.execute(
+            "SELECT Email, Name FROM HUBMAIL_AddressBook WHERE UserID=%s ORDER BY Name",
+            (user["id"],),
+        )
+        addressbook = [
+            {"email": r["Email"], "name": r["Name"] or ""} for r in cur.fetchall()
+        ]
+        return {"users": users, "contacts": contacts, "addressbook": addressbook}
     finally:
         conn.close()
 
@@ -1289,6 +1326,142 @@ def delete_contact(contact_id: int, user=Depends(get_current_user)):
     finally:
         conn.close()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- libreta de direcciones (autocomplete)
+def _valid_email(e):
+    return "@" in e and "." in e.split("@")[-1]
+
+
+def _account_ids_for(user):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT AccountID, CanonicalAccountID, EmailAddress FROM HUBMAIL_Accounts WHERE UserID=%s",
+            (user["id"],),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    ids = set()
+    own = set()
+    for r in rows:
+        ids.add(r["CanonicalAccountID"] or r["AccountID"])
+        own.add((r["EmailAddress"] or "").strip().lower())
+    return ids, own
+
+
+def collect_addresses(user):
+    ids, own = _account_ids_for(user)
+    if not ids:
+        return 0
+    seen = {}
+    ph = ",".join(["%s"] * len(ids))
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT DISTINCT FromEmail, FromName FROM HUBMAIL_Messages "
+            "WHERE AccountID IN (%s) AND FromEmail IS NOT NULL AND FromEmail<>'' "
+            "AND DateSent >= DATEADD(day,-60,GETDATE())" % ph,
+            list(ids),
+        )
+        for r in cur.fetchall():
+            e = (r["FromEmail"] or "").strip().lower()
+            if not e or e in own or not _valid_email(e):
+                continue
+            seen.setdefault(e, (r["FromName"] or "").strip())
+        cur.execute(
+            "SELECT ToText FROM HUBMAIL_Messages WHERE AccountID IN (%s) "
+            "AND ToText IS NOT NULL AND ToText<>'' "
+            "AND DateSent >= DATEADD(day,-60,GETDATE())" % ph,
+            list(ids),
+        )
+        for r in cur.fetchall():
+            try:
+                to = json.loads(r["ToText"] or "[]")
+            except Exception:
+                continue
+            for addr in to if isinstance(to, list) else []:
+                e = (addr.get("email") or "").strip().lower()
+                if not e or e in own or not _valid_email(e):
+                    continue
+                seen.setdefault(e, (addr.get("name") or "").strip())
+    finally:
+        conn.close()
+
+    if not seen:
+        return 0
+    added = 0
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT Email FROM HUBMAIL_AddressBook WHERE UserID=%s", (user["id"],))
+        existing = {r["Email"].lower() for r in cur.fetchall()}
+        for email, name in seen.items():
+            if email in existing:
+                continue
+            cur.execute(
+                "INSERT INTO HUBMAIL_AddressBook (UserID, Email, Name) VALUES (%s,%s,%s)",
+                (user["id"], email, (name[:255] if name else None)),
+            )
+            added += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return added
+
+
+@app.post("/api/contacts/collect")
+def collect_contacts(user=Depends(get_current_user)):
+    added = collect_addresses(user)
+    return {"ok": True, "added": added}
+
+
+@app.get("/api/contacts/autocomplete")
+def autocomplete_contacts(q: str = Query(default=""), user=Depends(get_current_user)):
+    q = (q or "").strip().lower()
+    if len(q) < 1:
+        return {"items": []}
+    like = "%" + q + "%"
+    items = []
+    seen = set()
+
+    def add(name, email):
+        e = (email or "").strip().lower()
+        if not e or e in seen:
+            return
+        seen.add(e)
+        items.append({"name": (name or "").strip(), "email": (email or "").strip()})
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT Name, Email FROM HUBMAIL_AddressBook WHERE UserID=%s "
+            "AND (LOWER(Email) LIKE %s OR LOWER(Name) LIKE %s) ORDER BY Name",
+            (user["id"], like, like),
+        )
+        for r in cur.fetchall():
+            add(r["Name"], r["Email"])
+        cur.execute(
+            "SELECT Nombre, Email FROM HUB_Users WHERE Activo=1 "
+            "AND (LOWER(Email) LIKE %s OR LOWER(Nombre) LIKE %s) ORDER BY Nombre",
+            (like, like),
+        )
+        for r in cur.fetchall():
+            add(r["Nombre"], r["Email"])
+        cur.execute(
+            "SELECT Name, Email FROM HUBMAIL_Contacts "
+            "WHERE (LOWER(Email) LIKE %s OR LOWER(Name) LIKE %s) ORDER BY Name",
+            (like, like),
+        )
+        for r in cur.fetchall():
+            add(r["Name"], r["Email"])
+    finally:
+        conn.close()
+    return {"items": items[:20]}
 
 
 @app.get("/api/health")

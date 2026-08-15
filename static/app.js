@@ -155,6 +155,7 @@ function logout() {
 async function boot() {
   try {
     await loadAccounts();
+    api("/contacts/collect", { method: "POST" }).catch(() => {});
     try {
       const s = await api("/settings");
       state.signature_html = s.signature_html || "";
@@ -866,6 +867,60 @@ function fmtSize(n) {
 }
 
 /* ============================================================ compose */
+function initRecipientAutocomplete(el) {
+  let timer = null, box = null, items = [], sel = -1;
+  const wrap = el.parentElement;
+  const lastToken = () => {
+    const v = el.value.split(",");
+    return (v[v.length - 1] || "").trim();
+  };
+  const replaceToken = email => {
+    const v = el.value.split(",");
+    v[v.length - 1] = email;
+    el.value = v.join(", ").replace(/,+\s*$/, "");
+    close();
+    el.focus();
+  };
+  const close = () => {
+    if (box) { box.remove(); box = null; }
+    items = [];
+    sel = -1;
+  };
+  const renderList = () => {
+    box.innerHTML = items.map((it, i) =>
+      `<div class="ac-item ${i === sel ? "active" : ""}" data-i="${i}"><b>${esc(it.name || it.email)}</b><span class="c-email">${esc(it.email)}</span></div>`).join("");
+    box.querySelectorAll(".ac-item").forEach(d => d.onclick = () => replaceToken(items[parseInt(d.dataset.i)].email));
+  };
+  const open = list => {
+    close();
+    if (!list.length) return;
+    items = list;
+    box = document.createElement("div");
+    box.className = "ac-drop";
+    renderList();
+    wrap.appendChild(box);
+  };
+  el.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const q = lastToken();
+      if (q.length < 2) return close();
+      try {
+        const res = await api("/contacts/autocomplete?q=" + encodeURIComponent(q));
+        open(res.items || []);
+      } catch (e) {}
+    }, 160);
+  });
+  el.addEventListener("keydown", e => {
+    if (!box || !items.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); sel = (sel + 1) % items.length; renderList(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; renderList(); }
+    else if (e.key === "Enter") { e.preventDefault(); if (sel >= 0) replaceToken(items[sel].email); }
+    else if (e.key === "Escape") close();
+  });
+  el.addEventListener("blur", () => setTimeout(close, 150));
+}
+
 function openCompose(prefill = {}) {
   const accOptions = state.accounts.map(a =>
     `<option value="${a.id}" ${a.id === state.currentAccountId ? "selected" : ""}>${esc(a.email)}</option>`).join("");
@@ -909,6 +964,8 @@ function openCompose(prefill = {}) {
   };
   document.getElementById("c-contacts").onclick = () => openContactsManager(true);
   insertSignature();
+  initRecipientAutocomplete(document.getElementById("c-to"));
+  initRecipientAutocomplete(document.getElementById("c-cc"));
 }
 
 function composeAccount() {
@@ -1010,12 +1067,19 @@ async function openContactsManager(pickMode = false) {
         <button class="btn-danger btn btn-sm" data-del="${c.id}" title="Eliminar">✕</button>
       </div>
     </div>`).join("") || `<div class="empty">Sin contactos recopilados</div>`;
+  const addrHtml = (data.addressbook || []).map(a =>
+    `<div class="contact-item">
+      <div><b>${esc(a.name || a.email)}</b><div class="c-email">${esc(a.email)}</div></div>
+      ${pickMode ? `<button class="btn-ghost btn btn-sm" data-email="${esc(a.email)}">Usar</button>` : ""}
+    </div>`).join("") || `<div class="empty">Aún sin contactos automáticos (se recopilan de tus correos recibidos y enviados)</div>`;
 
   openModal(`
     <h2>Contactos</h2>
     <h3 class="sec-title">Usuarios ECCSA</h3>
     ${usersHtml}
-    <h3 class="sec-title">Contactos recopilados</h3>
+    <h3 class="sec-title">Recopilados automáticamente</h3>
+    ${addrHtml}
+    <h3 class="sec-title">Contactos guardados</h3>
     ${contactsHtml}
     <div class="actions">
       <button class="btn-ghost btn" id="ct-new">+ Agregar</button>

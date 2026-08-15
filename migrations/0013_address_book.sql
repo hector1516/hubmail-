@@ -1,0 +1,12 @@
+IF OBJECT_ID('HUBMAIL_AddressBook','U') IS NULL
+BEGIN
+    CREATE TABLE HUBMAIL_AddressBook (
+        EntryID INT IDENTITY(1,1) PRIMARY KEY,
+        UserID INT NOT NULL,
+        Email NVARCHAR(255) NOT NULL,
+        Name NVARCHAR(255) NULL,
+        LastContact DATETIME DEFAULT GETDATE(),
+        CONSTRAINT UQ_HUBMAIL_AddrBook UNIQUE (UserID, Email)
+    );
+    CREATE INDEX IX_HUBMAIL_AddrBook_User ON HUBMAIL_AddressBook (UserID);
+END;
