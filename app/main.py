@@ -1,5 +1,6 @@
 import html
 import json
+import random
 import re
 import threading
 import time
@@ -37,6 +38,16 @@ app.add_middleware(
 )
 
 MAX_ACCOUNTS = 5
+
+ACC_COLORS = [
+    "#2a6fd6", "#8e44ad", "#d63031", "#0984e3", "#00b894", "#e17055",
+    "#e84393", "#6c5ce7", "#00cec9", "#e67e22", "#d35400", "#16a085",
+]
+
+
+def _pick_color(color: str) -> str:
+    color = (color or "").strip()
+    return color if color else random.choice(ACC_COLORS)
 
 IMG_CACHE = {}
 IMG_CACHE_MAX_ENTRIES = 300
@@ -151,6 +162,7 @@ class AccountPayload(BaseModel):
     username: str = ""
     password: str = ""
     is_default: bool = False
+    color: str = ""
 
 
 class SettingsPayload(BaseModel):
@@ -204,6 +216,7 @@ def _account_to_dict(acc):
         "is_default": bool(acc["IsDefault"]),
         "shared": bool(acc.get("CanonicalAccountID")),
         "canonical_id": acc.get("CanonicalAccountID"),
+        "color": acc.get("Color") or "",
     }
 
 
@@ -305,18 +318,19 @@ def create_account(payload: AccountPayload, user=Depends(get_current_user)):
             cur.execute(
                 "UPDATE HUBMAIL_Accounts SET IsDefault=0 WHERE UserID=%s", (admin_uid,)
             )
+        color = _pick_color(payload.color)
         cur.execute(
             """
             INSERT INTO HUBMAIL_Accounts
                 (UserID, EmailAddress, DisplayName, IMAPHost, IMAPPort,
-                 SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, Phone, IsDefault, CanonicalAccountID)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,%s,NULL)
+                 SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, Phone, IsDefault, CanonicalAccountID, Color)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,%s,NULL,%s)
             """,
             (
                 admin_uid, payload.email, payload.display_name,
                 imap_host, imap_port, smtp_host, smtp_port,
                 username, encrypt_secret(payload.password),
-                1 if payload.is_default else 0,
+                1 if payload.is_default else 0, color,
             ),
         )
         conn.commit()
@@ -397,30 +411,31 @@ def update_account(account_id: int, payload: AccountPayload, user=Depends(get_cu
         password_enc = acc["PasswordEnc"]
         if payload.password:
             password_enc = encrypt_secret(payload.password)
+        color = _pick_color(payload.color) if payload.color else (acc.get("Color") or "")
 
         cur.execute(
             """
             UPDATE HUBMAIL_Accounts SET
                 EmailAddress=%s, DisplayName=%s, IMAPHost=%s, IMAPPort=%s,
                 SMTPHost=%s, SMTPPort=%s, Username=%s, PasswordEnc=%s,
-                IsDefault=%s
+                IsDefault=%s, Color=%s
             WHERE AccountID=%s AND UserID=%s
             """,
             (
                 payload.email, payload.display_name,
                 imap_host, imap_port, smtp_host, smtp_port, username,
-                password_enc, 1 if payload.is_default else 0, account_id, user["id"],
+                password_enc, 1 if payload.is_default else 0, color, account_id, user["id"],
             ),
         )
         cur.execute(
             """UPDATE HUBMAIL_Accounts SET
                  EmailAddress=%s, DisplayName=%s, IMAPHost=%s, IMAPPort=%s,
-                 SMTPHost=%s, SMTPPort=%s, Username=%s, PasswordEnc=%s
+                 SMTPHost=%s, SMTPPort=%s, Username=%s, PasswordEnc=%s, Color=%s
                WHERE CanonicalAccountID=%s""",
             (
                 payload.email, payload.display_name,
                 imap_host, imap_port, smtp_host, smtp_port, username,
-                password_enc, account_id,
+                password_enc, color, account_id,
             ),
         )
         conn.commit()
@@ -526,11 +541,11 @@ def assign_account(account_id: int, payload: AssignPayload, user=Depends(get_cur
             cur.execute(
                 """INSERT INTO HUBMAIL_Accounts
                    (UserID, EmailAddress, DisplayName, IMAPHost, IMAPPort, SMTPHost, SMTPPort,
-                    Username, PasswordEnc, SignatureHtml, Phone, IsDefault, CanonicalAccountID)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,0,%s)""",
+                    Username, PasswordEnc, SignatureHtml, Phone, IsDefault, CanonicalAccountID, Color)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,0,%s,%s)""",
                 (uid, master["EmailAddress"], master["DisplayName"], master["IMAPHost"],
                  master["IMAPPort"], master["SMTPHost"], master["SMTPPort"], master["Username"],
-                 master["PasswordEnc"], account_id),
+                 master["PasswordEnc"], account_id, master.get("Color") or ""),
             )
             cur.execute(
                 "SELECT COUNT(*) AS N FROM HUBMAIL_Accounts WHERE UserID=%s", (uid,)
@@ -571,6 +586,28 @@ def list_folders(account_id: int, user=Depends(get_current_user)):
             return imap.list_folders()
     except IMAPError as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/accounts/{account_id}/unread")
+def account_unread(account_id: int, user=Depends(get_current_user)):
+    acc = _canonical_row(_get_account(user, account_id))
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT Folder, COUNT(*) AS N FROM HUBMAIL_Messages "
+            "WHERE AccountID=%s AND Seen=0 GROUP BY Folder",
+            (acc["AccountID"],),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    folders = [{"folder": r["Folder"], "count": r["N"]} for r in rows]
+    return {
+        "account_id": account_id,
+        "folders": folders,
+        "total": sum(r["N"] for r in rows),
+    }
 
 
 def _msg_row_to_dict(r):

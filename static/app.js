@@ -21,7 +21,20 @@ const state = {
   notified: new Set(),
   notifiedSeeded: false,
   signature_html: "",
+  unreadByAccount: {},
+  collapsedAccounts: new Set(),
 };
+
+const ACC_FALLBACK_COLORS = [
+  "#2a6fd6", "#8e44ad", "#d63031", "#0984e3", "#00b894", "#e17055",
+  "#e84393", "#6c5ce7", "#00cec9", "#e67e22", "#d35400", "#16a085",
+];
+
+function accColor(acc) {
+  if (acc && acc.color) return acc.color;
+  const id = acc ? acc.id : 0;
+  return ACC_FALLBACK_COLORS[Math.abs(id) % ACC_FALLBACK_COLORS.length];
+}
 
 const app = document.getElementById("app");
 const modalRoot = document.getElementById("modal-root");
@@ -191,9 +204,40 @@ async function loadAccounts() {
         state.expandedByAccount[acc.id] = {};
       }
     }));
+    await loadUnreadCounts();
   } finally {
     hideLoading();
   }
+}
+
+async function loadUnreadCounts() {
+  state.unreadByAccount = {};
+  await Promise.all(state.accounts.map(async acc => {
+    try {
+      const u = await api(`/accounts/${acc.id}/unread`);
+      state.unreadByAccount[acc.id] = u;
+    } catch (e) {
+      state.unreadByAccount[acc.id] = { folders: [], total: 0 };
+    }
+  }));
+  updateUnreadBadges();
+}
+
+function updateUnreadBadges() {
+  document.querySelectorAll("[data-unread]").forEach(el => {
+    const [accId, folder] = el.dataset.unread.split("|");
+    const u = state.unreadByAccount[accId];
+    const n = u ? (u.folders.find(f => f.folder === folder)?.count || 0) : 0;
+    el.textContent = n ? (n > 999 ? "999+" : n) : "";
+    el.style.display = n ? "" : "none";
+  });
+  document.querySelectorAll("[data-accunread]").forEach(el => {
+    const accId = el.dataset.accunread;
+    const u = state.unreadByAccount[accId];
+    const n = u ? (u.total || 0) : 0;
+    el.textContent = n ? (n > 999 ? "999+" : n) : "";
+    el.style.display = n ? "" : "none";
+  });
 }
 
 async function loadFolders() {
@@ -338,12 +382,11 @@ function renderShell() {
     <div class="shell">
       <header>
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
-        <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail</div>
+        <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail<span class="top-user">${esc(state.user?.name || state.user?.email || "")}</span></div>
         <div class="header-right">
           <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
           <button class="icon-btn btn-primary" id="btn-compose">✉️ <span class="btn-label">Redactar</span></button>
           <button class="icon-btn" id="btn-accounts" title="Cuentas y firma">⚙️</button>
-          <span class="user-name">${esc(state.user?.name || state.user?.email || "")}</span>
           <button class="icon-btn" id="btn-logout" title="Salir">⏻</button>
         </div>
       </header>
@@ -383,7 +426,7 @@ function buildFolderTree(folders, delimiter) {
   return root;
 }
 
-function renderFolderTree(node, depth, expanded, accId) {
+function renderFolderTree(node, depth, expanded, accId, unreadMap) {
   let html = "";
   const names = Object.keys(node.children).sort((a, b) =>
     node.children[a].name.toLowerCase().localeCompare(node.children[b].name.toLowerCase()));
@@ -394,17 +437,19 @@ function renderFolderTree(node, depth, expanded, accId) {
     const pad = 14 + depth * 16;
     const up = child.full.toUpperCase();
     const icon = hasKids ? (expanded[child.full] ? "📂" : "📁") : (up === "INBOX" ? "📥" : "📄");
+    const unread = unreadMap ? (unreadMap[child.full] || 0) : 0;
+    const badge = `<span class="unread-count" data-unread="${accId}|${esc(child.full)}" style="${unread ? "" : "display:none"}">${unread > 999 ? "999+" : unread}</span>`;
     if (!hasKids) {
-      html += `<li class="fitem ${isActive ? "active" : ""}" data-folder="${esc(child.full)}" style="padding-left:${pad}px"><span class="fi-ico">${icon}</span><span class="fi-name">${esc(child.name)}</span></li>`;
+      html += `<li class="fitem ${isActive ? "active" : ""}" data-folder="${esc(child.full)}" style="padding-left:${pad}px"><span class="fi-ico">${icon}</span><span class="fi-name">${esc(child.name)}</span>${badge}</li>`;
     } else {
       const open = !!expanded[child.full];
       html += `<li class="fitem fnode ${isActive ? "active" : ""}" style="padding-left:${pad - 6}px">
         <span class="caret" data-caret="${esc(child.full)}">${open ? "▾" : "▸"}</span>
         <span class="fi-ico">${icon}</span>
-        <span data-folder="${esc(child.full)}">${esc(child.name)}</span>
+        <span data-folder="${esc(child.full)}">${esc(child.name)}</span>${badge}
       </li>`;
       if (open) {
-        html += `<ul class="folders">${renderFolderTree(child, depth + 1, expanded, accId)}</ul>`;
+        html += `<ul class="folders">${renderFolderTree(child, depth + 1, expanded, accId, unreadMap)}</ul>`;
       }
     }
   }
@@ -416,15 +461,24 @@ function renderSidebar() {
   const list = state.accounts.map(acc => {
     const fa = state.foldersByAccount[acc.id] || { folders: [], delimiter: "/" };
     const expanded = state.expandedByAccount[acc.id] || {};
-    const tree = buildFolderTree(fa.folders, fa.delimiter);
-    const show = renderFolderTree(tree, 0, expanded, acc.id);
+    const collapsed = state.collapsedAccounts.has(acc.id);
+    const unreadData = state.unreadByAccount[acc.id] || { folders: [], total: 0 };
+    const unreadMap = {};
+    (unreadData.folders || []).forEach(f => { unreadMap[f.folder] = f.count; });
+    const totalUnread = unreadData.total || 0;
+    const tree = collapsed ? "" : renderFolderTree(buildFolderTree(fa.folders, fa.delimiter), 0, expanded, acc.id, unreadMap);
     const isCurrent = state.currentAccountId === acc.id;
+    const color = accColor(acc);
+    const caret = collapsed ? "▸" : "▾";
     return `
-      <div class="account-block" data-acc="${acc.id}">
-        <div class="account-head ${isCurrent ? "current" : ""}" data-acc="${acc.id}" title="Cuentas y firma">
-          <div>${esc(acc.display_name || acc.email)}<br><small>${esc(acc.email)}${fa.folders.length ? ` · ${fa.folders.length} carpetas` : ""}${acc.shared ? " · <span class=\"shared-badge\">Compartida</span>" : ""}</small></div>
+      <div class="account-block" data-acc="${acc.id}" style="--acc-color:${color}">
+        <div class="account-head ${isCurrent ? "current" : ""} ${collapsed ? "collapsed" : ""}" data-acc="${acc.id}" title="Clic: colapsar/expandir · Doble clic: abrir">
+          <span class="acc-dot" style="background:${color}"></span>
+          <div class="acc-main">${esc(acc.display_name || acc.email)}<br><small>${esc(acc.email)}${acc.shared ? ' · <span class="shared-badge">Compartida</span>' : ""}</small></div>
+          <span class="acc-unread" data-accunread="${acc.id}" style="${totalUnread ? "" : "display:none"}">${totalUnread > 999 ? "999+" : totalUnread}</span>
+          <span class="acc-caret">${caret}</span>
         </div>
-        ${show ? `<div class="sec-title">Carpetas</div><ul class="folders" data-acc="${acc.id}">${show}</ul>` : ""}
+        ${tree ? `<div class="sec-title">Carpetas</div><ul class="folders" data-acc="${acc.id}">${tree}</ul>` : ""}
       </div>`;
   }).join("");
 
@@ -441,8 +495,15 @@ function renderSidebar() {
   document.getElementById("sb-accounts").onclick = () => { sb.classList.remove("open"); openAccountsModal(); };
 
   sb.querySelectorAll(".account-head").forEach(el => {
-    el.onclick = async () => {
+    el.onclick = () => {
       const id = parseInt(el.dataset.acc);
+      if (state.collapsedAccounts.has(id)) state.collapsedAccounts.delete(id);
+      else state.collapsedAccounts.add(id);
+      renderSidebar();
+    };
+    el.ondblclick = async () => {
+      const id = parseInt(el.dataset.acc);
+      state.collapsedAccounts.delete(id);
       if (id !== state.currentAccountId) {
         state.currentAccountId = id;
         state.currentFolder = "INBOX";
@@ -500,6 +561,8 @@ function renderSidebar() {
 
 function renderContent() {
   const content = document.getElementById("content");
+  const curAcc = state.accounts.find(a => a.id === state.currentAccountId);
+  if (curAcc) content.style.setProperty("--acc-color", accColor(curAcc));
   const totalUnread = state.messages.reduce((n, m) => n + (m.unread ? 1 : 0), 0);
   document.getElementById("notif-badge").textContent = state.unreadOnly ? "✓" : (totalUnread ? totalUnread : "");
 
@@ -1015,7 +1078,7 @@ function openAccountsModal() {
   if (isAdmin) return openAdminAccounts();
   const rows = state.accounts.map(a => `
     <div class="contact-item">
-      <div><b>${esc(a.email)}</b><div class="c-email">${esc(a.display_name || "")} · ${a.is_default ? "predeterminada" : ""}</div></div>
+      <div><span class="acc-dot" style="background:${accColor(a)}"></span><b>${esc(a.email)}</b><div class="c-email">${esc(a.display_name || "")} · ${a.is_default ? "predeterminada" : ""}</div></div>
     </div>`).join("");
   openModal(`
     <h2>Mis cuentas</h2>
@@ -1036,7 +1099,7 @@ async function openAdminAccounts() {
   try { list = await api("/admin/accounts"); } catch (e) { return toast(e.message, "error"); }
   const rows = list.map(a => `
     <div class="contact-item">
-      <div><b>${esc(a.email)}</b><div class="c-email">${esc(a.display_name || "")} · ${a.assigned_users.length} usuario(s)</div></div>
+      <div><span class="acc-dot" style="background:${accColor(a)}"></span><b>${esc(a.email)}</b><div class="c-email">${esc(a.display_name || "")} · ${a.assigned_users.length} usuario(s)</div></div>
       <div>
         <button class="btn-ghost btn btn-sm" data-assign="${a.id}">👥 Asignar</button>
         <button class="btn-ghost btn btn-sm" data-edit="${a.id}">Editar</button>
@@ -1141,6 +1204,7 @@ function openAccountForm(accountId) {
       <div class="field"><label>SMTP puerto</label><input id="f-smtp-port" value="${esc(v("smtp_port", "465"))}"></div>
       <div class="field full"><label>Usuario</label><input id="f-user" value="${esc(v("username", ""))}"></div>
       <div class="field full"><label>Contraseña ${acc ? "(dejar vacío = no cambiar)" : ""}</label><input id="f-pass" type="password"></div>
+      <div class="field full"><label>Color de la cuenta</label><input type="color" id="f-color" value="${acc ? accColor(acc) : ACC_FALLBACK_COLORS[Math.floor(Math.random() * ACC_FALLBACK_COLORS.length)]}" style="height:38px;padding:2px;cursor:pointer"></div>
     </div>
     <div class="actions">
       <button class="btn-ghost btn" id="f-cancel">Cancelar</button>
@@ -1195,6 +1259,7 @@ function openAccountForm(accountId) {
       username: document.getElementById("f-user").value.trim(),
       password: document.getElementById("f-pass").value,
       is_default: false,
+      color: document.getElementById("f-color").value,
     };
   }
 }
@@ -1462,6 +1527,9 @@ function startNotifications() {
       const total = res.reduce((n, r) => n + (r.unread || 0), 0);
       const badge = document.getElementById("notif-badge");
       if (badge && !state.unreadOnly) badge.textContent = total ? total : "";
+    } catch (e) {}
+    try {
+      await loadUnreadCounts();
     } catch (e) {}
     try {
       const res = await api("/notifications/new");
