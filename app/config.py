@@ -32,7 +32,7 @@ def get_settings() -> Settings:
         key_file=os.getenv("HUBMAIL_KEY_FILE", "/data/.hubmail_key"),
         default_imap_host=os.getenv("HUBMAIL_IMAP_HOST", "imap.secureserver.net"),
         default_imap_port=int(os.getenv("HUBMAIL_IMAP_PORT", "993")),
-        default_smtp_host=os.getenv("HUBMAIL_SMTP_HOST", "smtp.secureserver.net"),
+        default_smtp_host=os.getenv("HUBMAIL_SMTP_HOST", "smtpout.secureserver.net"),
         default_smtp_port=int(os.getenv("HUBMAIL_SMTP_PORT", "465")),
     )
 

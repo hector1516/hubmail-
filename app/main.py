@@ -1,9 +1,16 @@
+import html
+import json
+import re
 import threading
 import time
+import urllib.parse
+import urllib.request
 from typing import Optional
 
+import jwt
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from starlette.staticfiles import StaticFiles as StarletteStaticFiles
 from pydantic import BaseModel, Field
@@ -12,10 +19,12 @@ from .auth import authenticate, create_token, get_current_user
 from .config import settings
 from .crypto import encrypt_secret, decrypt_secret
 from .db import get_conn
+from .filters import get_admin_user_id, is_admin
 from .imap_client import IMAPClient, IMAPError
 from .smtp_client import send_mail, SMTPError
 from .signature import build_default_signature
 from . import sync as syncmod
+from . import filters as filtmod
 
 app = FastAPI(title="HUBMail", version="0.1.0")
 
@@ -28,6 +37,33 @@ app.add_middleware(
 )
 
 MAX_ACCOUNTS = 5
+
+IMG_CACHE = {}
+IMG_CACHE_MAX_ENTRIES = 300
+IMG_MAX_BYTES = 8 * 1024 * 1024
+_IMG_BLOCKED_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "169.254.169.254")
+
+
+def _user_from_token(t: str = ""):
+    if not t:
+        raise HTTPException(401, "No autorizado")
+    try:
+        payload = jwt.decode(t, settings.jwt_secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(401, "Sesión inválida o expirada")
+    return {"id": int(payload["sub"]), "email": payload["email"], "name": payload["name"]}
+
+
+def _fetch_image(url: str):
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "HUBMail/1.0", "Accept": "image/*,image/webp,*/*"}
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        ctype = (r.headers.get("Content-Type", "") or "image/jpeg").split(";")[0]
+        data = r.read(IMG_MAX_BYTES + 1)
+        if len(data) > IMG_MAX_BYTES:
+            raise HTTPException(400, "Imagen demasiado grande")
+    return ctype, data
 
 SYNC_PERIOD = 300  # segundos: sincronización en el servidor cada 5 min
 _sync_thread = None
@@ -47,23 +83,35 @@ def _background_sync_loop():
             time.sleep(1)
 
 
-def _backfill_signatures():
+def _backfill_user_settings():
     try:
         conn = get_conn()
         try:
             cur = conn.cursor(as_dict=True)
-            cur.execute(
-                "SELECT AccountID, DisplayName, EmailAddress, Phone "
-                "FROM HUBMAIL_Accounts WHERE ISNULL(SignatureHtml,'')=''"
-            )
-            rows = cur.fetchall()
-            for r in rows:
-                sig = build_default_signature(
-                    r["DisplayName"], r["EmailAddress"], r["Phone"] or ""
-                )
+            cur.execute("SELECT DISTINCT UserID FROM HUBMAIL_Accounts")
+            users = [r["UserID"] for r in cur.fetchall()]
+            for uid in users:
                 cur.execute(
-                    "UPDATE HUBMAIL_Accounts SET SignatureHtml=%s WHERE AccountID=%s",
-                    (sig, r["AccountID"]),
+                    "SELECT COUNT(*) AS N FROM HUBMAIL_UserSettings WHERE UserID=%s",
+                    (uid,),
+                )
+                if cur.fetchone()["N"]:
+                    continue
+                cur.execute(
+                    "SELECT TOP 1 DisplayName, EmailAddress, Phone "
+                    "FROM HUBMAIL_Accounts WHERE UserID=%s AND CanonicalAccountID IS NULL "
+                    "ORDER BY IsDefault DESC, AccountID",
+                    (uid,),
+                )
+                a = cur.fetchone()
+                name = (a["DisplayName"] if a else "") or ""
+                phone = (a["Phone"] if a else "") or ""
+                email = (a["EmailAddress"] if a else "") or ""
+                sig = build_default_signature(name, email, phone)
+                cur.execute(
+                    "INSERT INTO HUBMAIL_UserSettings "
+                    "(UserID, DisplayName, Phone, SignatureHtml) VALUES (%s,%s,%s,%s)",
+                    (uid, name, phone, sig),
                 )
             conn.commit()
         finally:
@@ -75,7 +123,7 @@ def _backfill_signatures():
 @app.on_event("startup")
 def _start_sync_thread():
     global _sync_thread
-    _backfill_signatures()
+    _backfill_user_settings()
     if _sync_thread is None:
         _sync_thread = threading.Thread(target=_background_sync_loop, daemon=True)
         _sync_thread.start()
@@ -102,9 +150,13 @@ class AccountPayload(BaseModel):
     smtp_port: int = 0
     username: str = ""
     password: str = ""
-    signature_html: str = ""
-    phone: str = ""
     is_default: bool = False
+
+
+class SettingsPayload(BaseModel):
+    display_name: str = ""
+    phone: str = ""
+    signature_html: str = ""
 
 
 class Attachment(BaseModel):
@@ -122,6 +174,7 @@ class SendPayload(BaseModel):
     subject: str = ""
     body_html: str = ""
     reply_to: Optional[str] = None
+    read_receipt: bool = False
     attachments: list[Attachment] = Field(default_factory=list)
 
 
@@ -138,10 +191,6 @@ class ContactPayload(BaseModel):
 
 
 # ---------------------------------------------------------------- helpers
-def _is_auto_signature(sig):
-    return bool(sig) and "ECCSA Automation" in sig and "data:image/png;base64" in sig
-
-
 def _account_to_dict(acc):
     return {
         "id": acc["AccountID"],
@@ -152,8 +201,6 @@ def _account_to_dict(acc):
         "smtp_host": acc["SMTPHost"],
         "smtp_port": acc["SMTPPort"],
         "username": acc["Username"],
-        "signature_html": acc["SignatureHtml"] or "",
-        "phone": acc["Phone"] or "",
         "is_default": bool(acc["IsDefault"]),
         "shared": bool(acc.get("CanonicalAccountID")),
         "canonical_id": acc.get("CanonicalAccountID"),
@@ -222,7 +269,7 @@ def login(payload: LoginPayload):
 
 @app.get("/api/auth/me")
 def me(user=Depends(get_current_user)):
-    return user
+    return {**user, "is_admin": is_admin(user)}
 
 
 # ---------------------------------------------------------------- cuentas
@@ -259,22 +306,18 @@ def create_account(payload: AccountPayload, user=Depends(get_current_user)):
             cur.execute(
                 "UPDATE HUBMAIL_Accounts SET IsDefault=0 WHERE UserID=%s", (user["id"],)
             )
-        signature_html = (
-            payload.signature_html
-            or build_default_signature(payload.display_name, payload.email, payload.phone)
-        )
         cur.execute(
             """
             INSERT INTO HUBMAIL_Accounts
                 (UserID, EmailAddress, DisplayName, IMAPHost, IMAPPort,
                  SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, Phone, IsDefault)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,%s)
             """,
             (
                 user["id"], payload.email, payload.display_name,
                 imap_host, imap_port, smtp_host, smtp_port,
                 username, encrypt_secret(payload.password),
-                signature_html, payload.phone, 1 if payload.is_default else 0,
+                1 if payload.is_default else 0,
             ),
         )
         conn.commit()
@@ -298,11 +341,76 @@ def create_account(payload: AccountPayload, user=Depends(get_current_user)):
                 (row["Cid"], account_id),
             )
             conn.commit()
+
+        admin_uid = get_admin_user_id()
+        if admin_uid and admin_uid != user["id"]:
+            eff = row["Cid"] if row else account_id
+            cur.execute(
+                "SELECT COUNT(*) AS N FROM HUBMAIL_Accounts "
+                "WHERE UserID=%s AND EmailAddress=%s AND IMAPHost=%s AND Username=%s",
+                (admin_uid, payload.email, imap_host, username),
+            )
+            if cur.fetchone()["N"] == 0:
+                cur.execute(
+                    """INSERT INTO HUBMAIL_Accounts
+                       (UserID, EmailAddress, DisplayName, IMAPHost, IMAPPort, SMTPHost, SMTPPort, Username, PasswordEnc, SignatureHtml, Phone, IsDefault, CanonicalAccountID)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,0,%s)""",
+                    (admin_uid, payload.email, payload.display_name, imap_host, imap_port,
+                     smtp_host, smtp_port, username, encrypt_secret(payload.password), eff),
+                )
+                conn.commit()
     finally:
         conn.close()
 
     acc = _get_account(user, account_id)
     return _account_to_dict(acc)
+
+
+# ---------------------------------------------------------------- ajustes del usuario (firma personal)
+@app.get("/api/settings")
+def get_settings(user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT DisplayName, Phone, SignatureHtml FROM HUBMAIL_UserSettings WHERE UserID=%s",
+            (user["id"],),
+        )
+        r = cur.fetchone()
+        if not r:
+            return {"display_name": "", "phone": "", "signature_html": ""}
+        return {
+            "display_name": r["DisplayName"] or "",
+            "phone": r["Phone"] or "",
+            "signature_html": r["SignatureHtml"] or "",
+        }
+    finally:
+        conn.close()
+
+
+@app.put("/api/settings")
+def update_settings(payload: SettingsPayload, user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT COUNT(*) AS N FROM HUBMAIL_UserSettings WHERE UserID=%s",
+            (user["id"],),
+        )
+        if cur.fetchone()["N"]:
+            cur.execute(
+                "UPDATE HUBMAIL_UserSettings SET DisplayName=%s, Phone=%s, SignatureHtml=%s WHERE UserID=%s",
+                (payload.display_name, payload.phone, payload.signature_html, user["id"]),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO HUBMAIL_UserSettings (UserID, DisplayName, Phone, SignatureHtml) VALUES (%s,%s,%s,%s)",
+                (user["id"], payload.display_name, payload.phone, payload.signature_html),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 @app.put("/api/accounts/{account_id}")
@@ -325,30 +433,18 @@ def update_account(account_id: int, payload: AccountPayload, user=Depends(get_cu
         if payload.password:
             password_enc = encrypt_secret(payload.password)
 
-        signature_html = payload.signature_html
-        if _is_auto_signature(acc["SignatureHtml"]) and (
-            payload.phone != (acc["Phone"] or "")
-            or payload.display_name != (acc["DisplayName"] or "")
-        ):
-            signature_html = build_default_signature(
-                payload.display_name or acc["DisplayName"],
-                payload.email or acc["EmailAddress"],
-                payload.phone,
-            )
-
         cur.execute(
             """
             UPDATE HUBMAIL_Accounts SET
                 EmailAddress=%s, DisplayName=%s, IMAPHost=%s, IMAPPort=%s,
                 SMTPHost=%s, SMTPPort=%s, Username=%s, PasswordEnc=%s,
-                SignatureHtml=%s, Phone=%s, IsDefault=%s
+                IsDefault=%s
             WHERE AccountID=%s AND UserID=%s
             """,
             (
                 payload.email, payload.display_name,
                 imap_host, imap_port, smtp_host, smtp_port, username,
-                password_enc, signature_html, payload.phone,
-                1 if payload.is_default else 0, account_id, user["id"],
+                password_enc, 1 if payload.is_default else 0, account_id, user["id"],
             ),
         )
         conn.commit()
@@ -430,6 +526,7 @@ def _msg_row_to_dict(r):
         "unread": not r["Seen"],
         "flagged": bool(r["Flagged"]),
         "has_attachments": bool(r["HasAttachments"]),
+        "spam": bool(r.get("Spam")),
     }
 
 
@@ -443,6 +540,7 @@ def _msg_detail_row(r):
         "date": r["DateSent"].strftime("%Y-%m-%d %H:%M") if r["DateSent"] else "",
         "unread": not r["Seen"],
         "flagged": bool(r["Flagged"]),
+        "spam": bool(r.get("Spam")),
         "body_html": r["BodyHtml"] or "",
         "body_text": r["BodyText"] or "",
         "attachments": [],
@@ -584,6 +682,8 @@ def message_action(
             elif action in ("flag", "unflag"):
                 imap.set_flag(folder, msgid, "\\Flagged", action == "flag")
                 _db_update_flags(account_id, folder, uid, flagged=action == "flag")
+            elif action == "notspam":
+                filtmod._db_set_spam(account_id, uid, False)
             elif action == "delete":
                 imap.delete_message(folder, msgid)
                 _db_delete_messages(account_id, folder, [msgid])
@@ -666,10 +766,58 @@ def send_message(account_id: int, payload: SendPayload, user=Depends(get_current
             payload.body_html,
             [a.model_dump() for a in payload.attachments],
             payload.reply_to,
+            payload.read_receipt,
         )
     except SMTPError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}
+
+
+@app.get("/api/wallpaper")
+def wallpaper():
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT TOP 1 Url FROM HUB_BingWallpapers WHERE Url IS NOT NULL ORDER BY NEWID()"
+        )
+        row = cur.fetchone()
+        return {"url": row[0] if row else ""}
+    finally:
+        conn.close()
+
+
+@app.get("/api/img")
+def img_proxy(url: str = Query(...), t: str = Query(...)):
+    _user_from_token(t)
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(400, "URL no permitida")
+    host = parsed.hostname.lower().rstrip(".")
+    if host in _IMG_BLOCKED_HOSTS or host.startswith("127.") or host.startswith("169.254."):
+        raise HTTPException(400, "URL no permitida")
+    cached = IMG_CACHE.get(url)
+    if cached and cached[0] > time.time() - 3600:
+        ctype, data = cached[1], cached[2]
+    else:
+        try:
+            ctype, data = _fetch_image(url)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(400, "No se pudo cargar la imagen")
+        IMG_CACHE[url] = (time.time(), ctype, data)
+        if len(IMG_CACHE) > IMG_CACHE_MAX_ENTRIES:
+            oldest = min(IMG_CACHE, key=lambda k: IMG_CACHE[k][0])
+            del IMG_CACHE[oldest]
+    return Response(
+        content=data,
+        media_type=ctype,
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "Content-Disposition": "inline",
+        },
+    )
 
 
 # ---------------------------------------------------------------- notificaciones
@@ -703,6 +851,276 @@ def notifications(user=Depends(get_current_user)):
                 n = None
         results.append({"account_id": acc["AccountID"], "email": acc["EmailAddress"], "unread": n})
     return results
+
+
+def _preview_lines(body_text, body_html, max_lines=5, max_chars=320):
+    text = body_text or ""
+    if not text.strip() and body_html:
+        text = re.sub(r"<[^>]+>", " ", body_html)
+        text = html.unescape(text)
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        return ""
+    out = "\n".join(lines[:max_lines])
+    if len(out) > max_chars:
+        out = out[:max_chars].rsplit(" ", 1)[0] + "…"
+    return out
+
+
+@app.get("/api/notifications/new")
+def new_messages(user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT AccountID, CanonicalAccountID FROM HUBMAIL_Accounts WHERE UserID=%s",
+            (user["id"],),
+        )
+        accs = cur.fetchall()
+    finally:
+        conn.close()
+    for a in accs:
+        try:
+            syncmod.sync_folder(a["CanonicalAccountID"] or a["AccountID"], "INBOX", with_bodies=True)
+        except Exception:
+            pass
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            """SELECT TOP 8 ua.EmailAddress, m.AccountID, m.UID, m.FromName, m.FromEmail,
+                      m.Subject, m.DateSent, m.BodyText, m.BodyHtml
+               FROM HUBMAIL_Accounts ua
+               JOIN HUBMAIL_Accounts c ON c.AccountID = ISNULL(ua.CanonicalAccountID, ua.AccountID)
+               JOIN HUBMAIL_Messages m ON m.AccountID = c.AccountID
+                  AND m.Folder = 'INBOX' AND m.Seen = 0
+               WHERE ua.UserID = %s
+               ORDER BY m.DateSent DESC""",
+            (user["id"],),
+        )
+        items = [
+            {
+                "account_id": r["AccountID"],
+                "email": r["EmailAddress"],
+                "uid": str(r["UID"]),
+                "from_name": r["FromName"] or "",
+                "from_email": r["FromEmail"] or "",
+                "subject": r["Subject"] or "(sin asunto)",
+                "date": r["DateSent"].strftime("%d/%m/%Y %H:%M") if r["DateSent"] else "",
+                "preview": _preview_lines(r["BodyText"], r["BodyHtml"]),
+            }
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+    return {"items": items}
+
+
+# ---------------------------------------------------------------- filtros
+class FilterPayload(BaseModel):
+    scope: str = "ACCOUNT"
+    account_id: Optional[int] = None
+    name: str = ""
+    conditions: list = Field(default_factory=list)
+    action: str = "spam"
+    action_folder: str = ""
+    enabled: bool = True
+    order_no: int = 0
+
+
+def _filter_to_dict(r):
+    try:
+        conds = json.loads(r["Conditions"] or "[]")
+    except Exception:
+        conds = []
+    return {
+        "id": r["FilterID"],
+        "scope": r["Scope"],
+        "account_id": r["AccountID"],
+        "name": r["Name"],
+        "conditions": conds,
+        "action": r["Action"],
+        "action_folder": r["ActionFolder"] or "",
+        "enabled": bool(r["Enabled"]),
+        "order_no": r["OrderNo"],
+    }
+
+
+@app.get("/api/filters")
+def list_filters(user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT * FROM HUBMAIL_Filters WHERE UserID=%s ORDER BY OrderNo, FilterID",
+            (user["id"],),
+        )
+        return [_filter_to_dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+@app.post("/api/filters")
+def create_filter(payload: FilterPayload, user=Depends(get_current_user)):
+    scope = payload.scope.upper()
+    if scope not in ("GLOBAL", "ACCOUNT"):
+        raise HTTPException(400, "Alcance no válido")
+    if scope == "GLOBAL" and not is_admin(user):
+        raise HTTPException(403, "Solo el administrador puede crear filtros globales")
+    if scope == "ACCOUNT":
+        if not payload.account_id:
+            raise HTTPException(400, "Indica la cuenta a la que aplica")
+        _get_account(user, payload.account_id)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO HUBMAIL_Filters
+               (UserID, Scope, AccountID, Name, Conditions, Action, ActionFolder, Enabled, OrderNo)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (user["id"], scope,
+             payload.account_id if scope == "ACCOUNT" else None,
+             payload.name, json.dumps(payload.conditions, ensure_ascii=False),
+             payload.action, payload.action_folder, 1 if payload.enabled else 0,
+             payload.order_no),
+        )
+        conn.commit()
+        cur.execute("SELECT @@IDENTITY AS Id")
+        fid = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return {"id": fid}
+
+
+@app.put("/api/filters/{filter_id}")
+def update_filter(filter_id: int, payload: FilterPayload, user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT * FROM HUBMAIL_Filters WHERE FilterID=%s AND UserID=%s",
+            (filter_id, user["id"]),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Filtro no encontrado")
+        scope = payload.scope.upper()
+        if scope == "GLOBAL" and not is_admin(user):
+            raise HTTPException(403, "Solo el administrador puede usar filtros globales")
+        if scope == "ACCOUNT":
+            if not payload.account_id:
+                raise HTTPException(400, "Indica la cuenta a la que aplica")
+            _get_account(user, payload.account_id)
+        cur.execute(
+            """UPDATE HUBMAIL_Filters SET Scope=%s, AccountID=%s, Name=%s, Conditions=%s,
+               Action=%s, ActionFolder=%s, Enabled=%s, OrderNo=%s
+               WHERE FilterID=%s AND UserID=%s""",
+            (scope, payload.account_id if scope == "ACCOUNT" else None,
+             payload.name, json.dumps(payload.conditions, ensure_ascii=False),
+             payload.action, payload.action_folder, 1 if payload.enabled else 0,
+             payload.order_no, filter_id, user["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/filters/{filter_id}")
+def delete_filter(filter_id: int, user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM HUBMAIL_Filters WHERE FilterID=%s AND UserID=%s",
+            (filter_id, user["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- listas antispam (admin)
+class SpamListPayload(BaseModel):
+    name: str
+    zone: str
+    list_type: str = "DNSBL"
+    enabled: bool = True
+    priority: int = 0
+
+
+def _spam_list_to_dict(r):
+    return {
+        "id": r["ListId"],
+        "name": r["Name"],
+        "zone": r["Zone"],
+        "list_type": r["Type"],
+        "enabled": bool(r["Enabled"]),
+        "priority": r["Priority"],
+    }
+
+
+@app.get("/api/spam-lists")
+def list_spam_lists(user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT * FROM HUBMAIL_SpamLists ORDER BY Priority, ListId")
+        return [_spam_list_to_dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+@app.post("/api/spam-lists")
+def create_spam_list(payload: SpamListPayload, user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO HUBMAIL_SpamLists (Name, Type, Zone, Enabled, Priority) VALUES (%s,%s,%s,%s,%s)",
+            (payload.name, payload.list_type, payload.zone, 1 if payload.enabled else 0, payload.priority),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.put("/api/spam-lists/{list_id}")
+def update_spam_list(list_id: int, payload: SpamListPayload, user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE HUBMAIL_SpamLists SET Name=%s, Type=%s, Zone=%s, Enabled=%s, Priority=%s WHERE ListId=%s",
+            (payload.name, payload.list_type, payload.zone, 1 if payload.enabled else 0, payload.priority, list_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/spam-lists/{list_id}")
+def delete_spam_list(list_id: int, user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM HUBMAIL_SpamLists WHERE ListId=%s", (list_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- contactos

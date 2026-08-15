@@ -15,7 +15,7 @@ class SMTPError(Exception):
     pass
 
 
-def send_mail(account, to, cc, bcc, subject, body_html, attachments, reply_to=None):
+def send_mail(account, to, cc, bcc, subject, body_html, attachments, reply_to=None, read_receipt=False):
     total_size = sum(a.get("size", 0) for a in attachments)
     if total_size > MAX_ATTACH_BYTES:
         raise SMTPError(
@@ -33,11 +33,11 @@ def send_mail(account, to, cc, bcc, subject, body_html, attachments, reply_to=No
     outer["Subject"] = subject or "(sin asunto)"
     if reply_to:
         outer["Reply-To"] = reply_to
+    if read_receipt:
+        outer["Disposition-Notification-To"] = account["EmailAddress"]
     outer["Date"] = formatdate(localtime=True)
 
     html = body_html or ""
-    if account.get("SignatureHtml"):
-        html += "<br/>" + account["SignatureHtml"]
 
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(html, "html", "utf-8"))

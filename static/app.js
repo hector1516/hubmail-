@@ -18,6 +18,9 @@ const state = {
   currentMsgId: null,
   composeAttachments: [],
   selected: new Set(),
+  notified: new Set(),
+  notifiedSeeded: false,
+  signature_html: "",
 };
 
 const app = document.getElementById("app");
@@ -78,6 +81,19 @@ function closeModal() {
   modalRoot.innerHTML = "";
 }
 
+async function applyWallpaper() {
+  try {
+    const res = await fetch("/api/wallpaper");
+    const data = await res.json();
+    if (data.url) {
+      document.body.style.backgroundImage = `url("${data.url}")`;
+      document.body.style.backgroundSize = "cover";
+      document.body.style.backgroundPosition = "center";
+      document.body.style.backgroundAttachment = window.innerWidth > 820 ? "fixed" : "scroll";
+    }
+  } catch (e) {}
+}
+
 /* ============================================================ login */
 function renderLogin() {
   app.innerHTML = `
@@ -114,6 +130,10 @@ function renderLogin() {
 function logout() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
   state.token = null;
+  state.notified = new Set();
+  state.notifiedSeeded = false;
+  const stack = document.getElementById("notif-stack");
+  if (stack) stack.innerHTML = "";
   localStorage.removeItem("hubmail_token");
   renderLogin();
 }
@@ -122,6 +142,10 @@ function logout() {
 async function boot() {
   try {
     await loadAccounts();
+    try {
+      const s = await api("/settings");
+      state.signature_html = s.signature_html || "";
+    } catch (e) {}
     if (!state.accounts.length) {
       renderShell();
       toast("No tienes cuentas de correo. Agrégalas en Configuración.");
@@ -224,7 +248,7 @@ function messagesHtml() {
         <input type="checkbox" class="msg-check" data-id="${esc(m.id)}" ${sel ? "checked" : ""}>
         <div class="msg-main">
           <div class="row1">
-            <div class="from">${esc(sender)}</div>
+            <div class="from">${m.spam ? '<span class="spam-badge">SPAM</span> ' : ""}${esc(sender)}</div>
             <div class="date">${esc(m.date)}</div>
           </div>
           <div class="subject">${m.flagged ? "★ " : ""}${esc(m.subject)}</div>
@@ -314,10 +338,10 @@ function renderShell() {
     <div class="shell">
       <header>
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
-        <div class="brand">HUBMail</div>
+        <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail</div>
         <div class="header-right">
           <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
-          <button class="icon-btn btn-primary" id="btn-compose">✉️ Redactar</button>
+          <button class="icon-btn btn-primary" id="btn-compose">✉️ <span class="btn-label">Redactar</span></button>
           <button class="icon-btn" id="btn-accounts" title="Cuentas y firma">⚙️</button>
           <span class="user-name">${esc(state.user?.name || state.user?.email || "")}</span>
           <button class="icon-btn" id="btn-logout" title="Salir">⏻</button>
@@ -614,6 +638,12 @@ async function loadMessageDetail(id) {
   return api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(state.currentFolder)}`);
 }
 
+function proxyImages(html) {
+  if (!state.token) return html;
+  return html.replace(/src=(["'])(https?:\/\/[^"']+)\1/gi, (m, q, url) =>
+    `src=${q}/api/img?t=${encodeURIComponent(state.token)}&url=${encodeURIComponent(url)}${q}`);
+}
+
 function detailHtml(m) {
   const from = m.from[0];
   const sender = from ? `${esc(from.name || "")} &lt;${esc(from.email)}&gt;` : "";
@@ -630,6 +660,7 @@ function detailHtml(m) {
   inlineImages.forEach(a => {
     bodyHtml = bodyHtml.replace(new RegExp("cid:" + a.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), `data:${a.content_type};base64,${a.data}`);
   });
+  bodyHtml = proxyImages(bodyHtml);
 
   return `
     <div class="detail-toolbar">
@@ -637,6 +668,8 @@ function detailHtml(m) {
       <button class="btn-ghost btn btn-sm" id="d-reply">↩ Responder</button>
       <button class="btn-ghost btn btn-sm" id="d-fwd">↪ Reenviar</button>
       <button class="btn-ghost btn btn-sm" id="d-flag">${m.flagged ? "★" : "☆"}</button>
+      <button class="btn-ghost btn btn-sm" id="d-print">🖨 Imprimir</button>
+      <button class="btn-ghost btn btn-sm" id="d-notspam" style="display:${m.spam ? "" : "none"}">No es spam</button>
       <span class="spacer"></span>
       <button class="btn-danger btn btn-sm" id="d-del">🗑</button>
     </div>
@@ -647,7 +680,7 @@ function detailHtml(m) {
       ${cc}
       <div class="detail-meta">Fecha: ${esc(m.date)}</div>
       ${atts}
-      <iframe class="body-frame" sandbox="" srcdoc="${esc(bodyHtml || "")}"></iframe>
+      <iframe class="body-frame" sandbox="" referrerpolicy="no-referrer" srcdoc="${esc(bodyHtml || "")}"></iframe>
     </div>`;
 }
 
@@ -664,7 +697,10 @@ function bindDetailActions(m) {
   document.getElementById("d-back").onclick = () => {
     state.currentMsgId = null;
     if (isModal) closeModal();
-    else if (dp) dp.classList.remove("open");
+    else if (dp) {
+      dp.classList.remove("open");
+      dp.innerHTML = `<div class="empty" style="margin-top:80px">Selecciona un mensaje para leerlo</div>`;
+    }
   };
   document.getElementById("d-del").onclick = async () => {
     if (!confirm("¿Eliminar este mensaje?")) return;
@@ -687,6 +723,61 @@ function bindDetailActions(m) {
   document.getElementById("d-fwd").onclick = () => {
     openCompose({ subject: m.subject.startsWith("Fwd:") ? m.subject : "Fwd: " + m.subject });
   };
+  document.getElementById("d-print").onclick = () => printMessage(m);
+  const ns = document.getElementById("d-notspam");
+  if (ns) ns.onclick = async () => {
+    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=notspam`, { method: "PATCH" }).catch(e => toast(e.message, "error"));
+    m.spam = false;
+    document.getElementById("d-notspam").style.display = "none";
+    toast("Marcado como no spam", "ok");
+  };
+}
+
+function printMessage(m) {
+  const from = m.from[0];
+  const to = m.to.map(t => t.name || t.email).join(", ");
+  const cc = m.cc.length ? `<p><b>CC:</b> ${esc(m.cc.map(t => t.name || t.email).join(", "))}</p>` : "";
+  const atts = m.attachments.filter(a => !a.cid).map(a => esc(a.name)).join(", ");
+  const inlineImages = m.attachments.filter(a => a.cid);
+  let bodyHtml = m.body_html || "";
+  inlineImages.forEach(a => {
+    bodyHtml = bodyHtml.replace(new RegExp("cid:" + a.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), `data:${a.content_type};base64,${a.data}`);
+  });
+  bodyHtml = proxyImages(bodyHtml);
+  const w = window.open("", "_blank", "width=900,height=700");
+  if (!w) return toast("Permite ventanas emergentes para imprimir", "error");
+  w.document.write(`<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>${esc(m.subject)}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #222; margin: 28px; }
+  .h { border-bottom: 2px solid #1a2b49; padding-bottom: 10px; margin-bottom: 16px; }
+  .h h1 { font-size: 18px; color: #1a2b49; margin: 0 0 10px; }
+  .meta { font-size: 12px; color: #555; line-height: 1.5; }
+  .meta p { margin: 2px 0; }
+  .meta b { color: #333; }
+  .body { margin-top: 18px; font-size: 13px; line-height: 1.5; }
+  .body img { max-width: 100%; }
+</style>
+</head>
+<body>
+  <div class="h">
+    <h1>${esc(m.subject)}</h1>
+    <div class="meta">
+      <p><b>De:</b> ${esc(from ? (from.name || from.email) : "")} &lt;${esc(from ? from.email : "")}&gt;</p>
+      <p><b>Para:</b> ${esc(to)}</p>
+      ${cc}
+      <p><b>Fecha:</b> ${esc(m.date)}</p>
+      ${atts ? `<p><b>Adjuntos:</b> ${esc(atts)}</p>` : ""}
+    </div>
+  </div>
+  <div class="body">${bodyHtml}</div>
+  <script>window.onload = function(){ window.focus(); window.print(); };</script>
+</body>
+</html>`);
+  w.document.close();
 }
 
 async function openMessageModal(id) {
@@ -724,7 +815,8 @@ function openCompose(prefill = {}) {
     <div class="compose-row"><label>Asunto:</label><input id="c-subject" value="${esc(prefill.subject || "")}"></div>
     <div class="compose-row"><label>Adj:</label><input type="file" id="c-files" multiple></div>
     <div class="attach-list" id="c-attach-list"></div>
-    <textarea id="compose-body" placeholder="Escribe tu mensaje..."></textarea>
+    <div class="compose-row"><label></label><label class="rec-check"><input type="checkbox" id="c-receipt"> Solicitar confirmación de lectura</label></div>
+    <div id="compose-body" contenteditable="true" spellcheck="true" lang="es-MX" data-placeholder="Escribe tu mensaje..."></div>
     <div class="actions">
       <button class="btn-ghost btn" id="c-contacts">👥 Contactos</button>
       <span class="spacer"></span>
@@ -753,6 +845,33 @@ function openCompose(prefill = {}) {
     });
   };
   document.getElementById("c-contacts").onclick = () => openContactsManager(true);
+  insertSignature();
+}
+
+function composeAccount() {
+  const sel = document.getElementById("c-from");
+  return state.accounts.find(a => a.id === parseInt(sel ? sel.value : 0)) || state.accounts[0];
+}
+
+function insertSignature() {
+  const body = document.getElementById("compose-body");
+  if (!body) return;
+  body.querySelectorAll(".hub-sig").forEach(el => el.remove());
+  if (!state.signature_html) return;
+  const wrap = document.createElement("div");
+  wrap.className = "hub-sig";
+  wrap.innerHTML = `<div><br></div><div><br></div><div><br></div>${state.signature_html}`;
+  body.appendChild(wrap);
+}
+
+function bodyHtmlToSend() {
+  const body = document.getElementById("compose-body");
+  const clone = body.cloneNode(true);
+  clone.querySelectorAll(".hub-sig").forEach(b => {
+    while (b.firstChild) b.parentNode.insertBefore(b.firstChild, b);
+    b.remove();
+  });
+  return clone.innerHTML;
 }
 
 function renderAttachList() {
@@ -771,10 +890,9 @@ async function sendMessage() {
   const to = document.getElementById("c-to").value.split(",").map(s => s.trim()).filter(Boolean);
   const cc = document.getElementById("c-cc").value.split(",").map(s => s.trim()).filter(Boolean);
   const subject = document.getElementById("c-subject").value;
-  const bodyText = document.getElementById("compose-body").value;
   const accountId = parseInt(document.getElementById("c-from").value);
   if (!to.length) return toast("Indica al menos un destinatario", "error");
-  const bodyHtml = bodyText.split("\n").map(l => esc(l)).join("<br>");
+  const bodyHtml = bodyHtmlToSend();
   const btn = document.getElementById("c-send");
   btn.disabled = true;
   btn.textContent = "Enviando...";
@@ -782,7 +900,7 @@ async function sendMessage() {
   try {
     await api(`/accounts/${accountId}/send`, {
       method: "POST",
-      body: JSON.stringify({ to, cc, subject, body_html: bodyHtml, attachments: state.composeAttachments }),
+      body: JSON.stringify({ to, cc, subject, body_html: bodyHtml, attachments: state.composeAttachments, read_receipt: document.getElementById("c-receipt").checked }),
     });
     closeModal();
     toast("Correo enviado", "ok");
@@ -903,31 +1021,55 @@ function openAccountsModal() {
     <div>${rows || `<div class="empty">Sin cuentas</div>`}</div>
     <div class="actions">
       <button class="btn-ghost btn" id="acc-close">Cerrar</button>
+      <button class="btn-ghost btn" id="acc-sig">✍️ Firma personal</button>
+      <button class="btn-ghost btn" id="acc-filt">📁 Filtros</button>
       <button class="btn-primary btn" id="acc-new">+ Nueva cuenta</button>
     </div>`);
   document.getElementById("acc-close").onclick = closeModal;
+  document.getElementById("acc-sig").onclick = openSignatureForm;
+  document.getElementById("acc-filt").onclick = openFiltersManager;
   document.getElementById("acc-new").onclick = () => openAccountForm();
   document.querySelectorAll("[data-edit]").forEach(b => {
     b.onclick = () => openAccountForm(parseInt(b.dataset.edit));
   });
 }
 
+const PROVIDERS = [
+  { name: "Personalizado", imap_host: "", imap_port: 993, smtp_host: "", smtp_port: 587 },
+  { name: "GoDaddy (secureserver)", imap_host: "imap.secureserver.net", imap_port: 993, smtp_host: "smtpout.secureserver.net", smtp_port: 465 },
+  { name: "Gmail", imap_host: "imap.gmail.com", imap_port: 993, smtp_host: "smtp.gmail.com", smtp_port: 587 },
+  { name: "Outlook / Office 365", imap_host: "outlook.office365.com", imap_port: 993, smtp_host: "smtp.office365.com", smtp_port: 587 },
+  { name: "Yahoo", imap_host: "imap.mail.yahoo.com", imap_port: 993, smtp_host: "smtp.mail.yahoo.com", smtp_port: 465 },
+  { name: "iCloud", imap_host: "imap.mail.me.com", imap_port: 993, smtp_host: "smtp.mail.me.com", smtp_port: 587 },
+  { name: "Zoho", imap_host: "imap.zoho.com", imap_port: 993, smtp_host: "smtp.zoho.com", smtp_port: 465 },
+  { name: "HostGator / cPanel (mail.tu-dominio.com)", imap_host: "mail.tu-dominio.com", imap_port: 993, smtp_host: "mail.tu-dominio.com", smtp_port: 465 },
+];
+
+function providerPreset(acc) {
+  if (!acc) return null;
+  return PROVIDERS.find(p =>
+    p.imap_host && p.imap_host === acc.imap_host && p.imap_port === acc.imap_port &&
+    p.smtp_host === acc.smtp_host && p.smtp_port === acc.smtp_port);
+}
+
 function openAccountForm(accountId) {
   const acc = accountId ? state.accounts.find(a => a.id === accountId) : null;
   const v = (k, d) => acc ? (acc[k] || d) : d;
+  const presetName = (providerPreset(acc) || { name: "Personalizado" }).name;
+  const provOptions = PROVIDERS.map(p =>
+    `<option value="${esc(p.name)}" ${p.name === presetName ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   openModal(`
     <h2>${acc ? "Editar cuenta" : "Nueva cuenta"}</h2>
     <div class="modal-grid">
+      <div class="field full"><label>Proveedor (rellena IMAP/SMTP automáticamente)</label><select id="f-prov">${provOptions}</select></div>
       <div class="field full"><label>Correo (remitente)</label><input id="f-email" value="${esc(v("email", ""))}" placeholder="usuario@ecc-sa.com.mx"></div>
       <div class="field full"><label>Nombre a mostrar</label><input id="f-dname" value="${esc(v("display_name", ""))}" placeholder="Nombre Apellido"></div>
       <div class="field"><label>IMAP host</label><input id="f-imap" value="${esc(v("imap_host", "imap.secureserver.net"))}"></div>
       <div class="field"><label>IMAP puerto</label><input id="f-imap-port" value="${esc(v("imap_port", "993"))}"></div>
-      <div class="field"><label>SMTP host</label><input id="f-smtp" value="${esc(v("smtp_host", "smtp.secureserver.net"))}"></div>
+      <div class="field"><label>SMTP host</label><input id="f-smtp" value="${esc(v("smtp_host", "smtpout.secureserver.net"))}"></div>
       <div class="field"><label>SMTP puerto</label><input id="f-smtp-port" value="${esc(v("smtp_port", "465"))}"></div>
-      <div class="field"><label>Usuario</label><input id="f-user" value="${esc(v("username", ""))}"></div>
-      <div class="field"><label>Contraseña ${acc ? "(dejar vacío = no cambiar)" : ""}</label><input id="f-pass" type="password"></div>
-      <div class="field full"><label>Teléfono</label><input id="f-phone" value="${esc(v("phone", ""))}" placeholder="+52 81 0000 0000"></div>
-      <div class="field full"><label>Firma HTML ${acc ? "" : "(vacía al crear = se genera automáticamente)"}</label><textarea id="f-sig">${esc(v("signature_html", ""))}</textarea></div>
+      <div class="field full"><label>Usuario</label><input id="f-user" value="${esc(v("username", ""))}"></div>
+      <div class="field full"><label>Contraseña ${acc ? "(dejar vacío = no cambiar)" : ""}</label><input id="f-pass" type="password"></div>
     </div>
     <div class="actions">
       <button class="btn-ghost btn" id="f-cancel">Cancelar</button>
@@ -936,6 +1078,14 @@ function openAccountForm(accountId) {
       <button class="btn-primary btn" id="f-save">Guardar</button>
     </div>`);
   document.getElementById("f-cancel").onclick = () => openAccountsModal();
+  document.getElementById("f-prov").onchange = () => {
+    const p = PROVIDERS.find(x => x.name === document.getElementById("f-prov").value);
+    if (!p) return;
+    document.getElementById("f-imap").value = p.imap_host;
+    document.getElementById("f-imap-port").value = p.imap_port;
+    document.getElementById("f-smtp").value = p.smtp_host;
+    document.getElementById("f-smtp-port").value = p.smtp_port;
+  };
   document.getElementById("f-test").onclick = async () => {
     const payload = readForm();
     if (!acc) return toast("Guarda la cuenta primero", "error");
@@ -973,9 +1123,260 @@ function openAccountForm(accountId) {
       smtp_port: parseInt(document.getElementById("f-smtp-port").value) || 465,
       username: document.getElementById("f-user").value.trim(),
       password: document.getElementById("f-pass").value,
-      phone: document.getElementById("f-phone").value.trim(),
-      signature_html: document.getElementById("f-sig").value,
       is_default: false,
+    };
+  }
+}
+
+/* ============================================================ firma personal */
+async function openSignatureForm() {
+  let s = { display_name: "", phone: "", signature_html: "" };
+  try { s = await api("/settings"); } catch (e) {}
+  openModal(`
+    <h2>Firma personal</h2>
+    <div class="field"><label>Nombre a mostrar</label><input id="sg-name" value="${esc(s.display_name || "")}" placeholder="Nombre Apellido"></div>
+    <div class="field"><label>Teléfono</label><input id="sg-phone" value="${esc(s.phone || "")}" placeholder="+52 81 0000 0000"></div>
+    <div class="field"><label>Firma HTML (se agrega en todos los correos)</label><textarea id="sg-sig">${esc(s.signature_html || "")}</textarea><label class="sig-prev-label">Vista previa</label><div class="sig-preview" id="sg-preview"></div></div>
+    <div class="actions">
+      <button class="btn-ghost btn" id="sg-cancel">Cancelar</button>
+      <button class="btn-primary btn" id="sg-save">Guardar firma</button>
+    </div>`);
+  document.getElementById("sg-cancel").onclick = () => openAccountsModal();
+  const sigEl = document.getElementById("sg-sig");
+  const prevEl = document.getElementById("sg-preview");
+  const renderPrev = () => {
+    prevEl.innerHTML = sigEl.value.trim()
+      ? sigEl.value
+      : '<span class="sig-empty">Sin firma personal. Si la dejas vacía se usará la firma ECCSA automática.</span>';
+  };
+  sigEl.addEventListener("input", renderPrev);
+  renderPrev();
+  document.getElementById("sg-save").onclick = async () => {
+    const payload = {
+      display_name: document.getElementById("sg-name").value.trim(),
+      phone: document.getElementById("sg-phone").value.trim(),
+      signature_html: document.getElementById("sg-sig").value,
+    };
+    try {
+      await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
+      state.signature_html = payload.signature_html;
+      closeModal();
+      toast("Firma guardada", "ok");
+    } catch (e) { toast(e.message, "error"); }
+  };
+}
+
+/* ============================================================ filtros y antispam */
+const FILTER_FIELDS = [
+  ["from", "De (remitente)"],
+  ["to", "Para"],
+  ["subject", "Asunto"],
+  ["body", "Contenido"],
+  ["domain", "Dominio del remitente"],
+];
+const FILTER_ACTIONS = [
+  ["mark_read", "Marcar como leído"],
+  ["spam", "Marcar como spam"],
+  ["delete", "Eliminar"],
+  ["move", "Mover a carpeta"],
+];
+
+async function openFiltersManager() {
+  let filters = [];
+  try { filters = await api("/filters"); } catch (e) { return toast(e.message, "error"); }
+  const rows = filters.map(f => {
+    const n = (f.conditions || []).length;
+    return `
+    <div class="contact-item">
+      <div><b>${esc(f.name || "Sin nombre")}</b>
+        <div class="c-email">${f.scope === "GLOBAL" ? "Global (toda la app)" : (f.account_id ? "Cuenta " + f.account_id : "Todas mis cuentas")} · ${n} condicion(es) · ${esc(FILTER_ACTIONS.find(a => a[0] === f.action)?.[1] || f.action)} · ${f.enabled ? "activo" : "inactivo"}</div>
+      </div>
+      <div>
+        <button class="btn-ghost btn btn-sm" data-edit="${f.id}">Editar</button>
+        <button class="btn-danger btn btn-sm" data-del="${f.id}">🗑</button>
+      </div>
+    </div>`;
+  }).join("");
+  const isAdmin = state.user && state.user.is_admin;
+  openModal(`
+    <h2>Filtros</h2>
+    <div>${rows || `<div class="empty">Sin filtros todavía</div>`}</div>
+    <div class="actions">
+      <button class="btn-ghost btn" id="ft-back">← Cuentas</button>
+      ${isAdmin ? `<button class="btn-ghost btn" id="ft-lists">🛡 Listas antispam</button>` : ""}
+      <button class="btn-primary btn" id="ft-new">+ Nuevo filtro</button>
+    </div>`);
+  document.getElementById("ft-back").onclick = openAccountsModal;
+  document.getElementById("ft-new").onclick = () => openFilterForm();
+  if (isAdmin) document.getElementById("ft-lists").onclick = openSpamListsManager;
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openFilterForm(parseInt(b.dataset.edit)));
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    if (!confirm("¿Eliminar este filtro?")) return;
+    try {
+      await api(`/filters/${b.dataset.del}`, { method: "DELETE" });
+      toast("Filtro eliminado", "ok");
+    } catch (e) { toast(e.message, "error"); }
+    openFiltersManager();
+  });
+}
+
+function openFilterForm(filterId) {
+  const f = filterId ? null : null;
+  let cur = null;
+  if (filterId) {
+    api("/filters").then(list => {
+      cur = list.find(x => x.id === filterId);
+      render(cur);
+    }).catch(e => toast(e.message, "error"));
+  } else {
+    render({ scope: "ACCOUNT", account_id: state.currentAccountId, name: "", conditions: [{ field: "from", op: "contains", value: "" }], action: "spam", action_folder: "", enabled: true, order_no: 0 });
+  }
+  function render(base) {
+    const accOpts = state.accounts.map(a => `<option value="${a.id}" ${a.id === base.account_id ? "selected" : ""}>${esc(a.email)}</option>`).join("");
+    const condRows = (base.conditions || []).map((c, i) => `
+      <div class="cond-row">
+        <select class="c-field" data-i="${i}">${FILTER_FIELDS.map(([v, l]) => `<option value="${v}" ${c.field === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <select class="c-op" data-i="${i}">
+          <option value="contains" ${c.op === "contains" ? "selected" : ""}>contiene</option>
+          <option value="equals" ${c.op === "equals" ? "selected" : ""}>es igual a</option>
+        </select>
+        <input class="c-val" data-i="${i}" value="${esc(c.value || "")}" placeholder="texto…">
+        <button class="btn-danger btn btn-sm c-del" data-i="${i}">−</button>
+      </div>`).join("");
+    openModal(`
+      <h2>${filterId ? "Editar filtro" : "Nuevo filtro"}</h2>
+      <div class="field"><label>Nombre</label><input id="cf-name" value="${esc(base.name || "")}" placeholder="Ej. Facturas del proveedor"></div>
+      <div class="field"><label>Alcance</label><select id="cf-scope">
+        <option value="ACCOUNT" ${base.scope === "ACCOUNT" ? "selected" : ""}>Cuenta</option>
+        ${state.user && state.user.is_admin ? `<option value="GLOBAL" ${base.scope === "GLOBAL" ? "selected" : ""}>Global (toda la app)</option>` : ""}
+      </select></div>
+      <div class="field" id="cf-acc-wrap"><label>Cuenta</label><select id="cf-acc">${accOpts}</select></div>
+      <div class="field"><label>Condiciones (todas deben cumplirse)</label><div id="cf-conds">${condRows}</div>
+        <button class="btn-ghost btn btn-sm" id="cf-add">+ Agregar condición</button></div>
+      <div class="field"><label>Acción</label><select id="cf-action">${FILTER_ACTIONS.map(([v, l]) => `<option value="${v}" ${base.action === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="field" id="cf-folder-wrap"><label>Carpeta destino</label><input id="cf-folder" value="${esc(base.action_folder || "")}" placeholder="Ej. INBOX/Clientes"></div>
+      <div class="field"><label><input type="checkbox" id="cf-enabled" ${base.enabled ? "checked" : ""}> Activo</label></div>
+      <div class="actions">
+        <button class="btn-ghost btn" id="cf-cancel">Cancelar</button>
+        <button class="btn-primary btn" id="cf-save">Guardar</button>
+      </div>`);
+    const scopeEl = document.getElementById("cf-scope");
+    const syncScope = () => {
+      document.getElementById("cf-acc-wrap").style.display = scopeEl.value === "ACCOUNT" ? "" : "none";
+    };
+    scopeEl.onchange = syncScope;
+    syncScope();
+    const syncAction = () => {
+      document.getElementById("cf-folder-wrap").style.display = document.getElementById("cf-action").value === "move" ? "" : "none";
+    };
+    document.getElementById("cf-action").onchange = syncAction;
+    syncAction();
+    document.getElementById("cf-add").onclick = () => {
+      const wrap = document.getElementById("cf-conds");
+      const i = wrap.querySelectorAll(".cond-row").length;
+      wrap.insertAdjacentHTML("beforeend", `
+        <div class="cond-row">
+          <select class="c-field" data-i="${i}">${FILTER_FIELDS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
+          <select class="c-op" data-i="${i}">
+            <option value="contains">contiene</option>
+            <option value="equals">es igual a</option>
+          </select>
+          <input class="c-val" data-i="${i}" placeholder="texto…">
+          <button class="btn-danger btn btn-sm c-del" data-i="${i}">−</button>
+        </div>`);
+    };
+    document.getElementById("cf-conds").addEventListener("click", e => {
+      if (e.target.classList.contains("c-del")) e.target.closest(".cond-row").remove();
+    });
+    document.getElementById("cf-cancel").onclick = openFiltersManager;
+    document.getElementById("cf-save").onclick = async () => {
+      const conds = [...document.querySelectorAll(".cond-row")].map(r => ({
+        field: r.querySelector(".c-field").value,
+        op: r.querySelector(".c-op").value,
+        value: r.querySelector(".c-val").value.trim(),
+      })).filter(c => c.value);
+      const payload = {
+        scope: document.getElementById("cf-scope").value,
+        account_id: document.getElementById("cf-scope").value === "ACCOUNT" ? parseInt(document.getElementById("cf-acc").value) : null,
+        name: document.getElementById("cf-name").value.trim(),
+        conditions: conds,
+        action: document.getElementById("cf-action").value,
+        action_folder: document.getElementById("cf-folder").value.trim(),
+        enabled: document.getElementById("cf-enabled").checked,
+        order_no: 0,
+      };
+      try {
+        if (filterId) await api(`/filters/${filterId}`, { method: "PUT", body: JSON.stringify(payload) });
+        else await api("/filters", { method: "POST", body: JSON.stringify(payload) });
+        toast("Filtro guardado", "ok");
+        openFiltersManager();
+      } catch (e) { toast(e.message, "error"); }
+    };
+  }
+}
+
+async function openSpamListsManager() {
+  let lists = [];
+  try { lists = await api("/spam-lists"); } catch (e) { return toast(e.message, "error"); }
+  const rows = lists.map(l => `
+    <div class="contact-item">
+      <div><b>${esc(l.name)}</b><div class="c-email">${esc(l.zone)} · ${l.enabled ? "activa" : "inactiva"} · prioridad ${l.priority}</div></div>
+      <div>
+        <button class="btn-ghost btn btn-sm" data-edit="${l.id}">Editar</button>
+        <button class="btn-danger btn btn-sm" data-del="${l.id}">🗑</button>
+      </div>
+    </div>`).join("");
+  openModal(`
+    <h2>Listas antispam (DNSBL)</h2>
+    <div>${rows || `<div class="empty">Sin listas</div>`}</div>
+    <div class="actions">
+      <button class="btn-ghost btn" id="sl-back">← Filtros</button>
+      <button class="btn-primary btn" id="sl-new">+ Nueva lista</button>
+    </div>`);
+  document.getElementById("sl-back").onclick = openFiltersManager;
+  document.getElementById("sl-new").onclick = () => openSpamListForm();
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openSpamListForm(parseInt(b.dataset.edit)));
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    if (!confirm("¿Eliminar esta lista?")) return;
+    try {
+      await api(`/spam-lists/${b.dataset.del}`, { method: "DELETE" });
+      toast("Lista eliminada", "ok");
+    } catch (e) { toast(e.message, "error"); }
+    openSpamListsManager();
+  });
+}
+
+function openSpamListForm(listId) {
+  api("/spam-lists").then(lists => {
+    const l = lists.find(x => x.id === listId);
+    render(l || { name: "", zone: "zen.spamhaus.org", list_type: "DNSBL", enabled: true, priority: 0 });
+  }).catch(e => toast(e.message, "error"));
+  function render(base) {
+    openModal(`
+      <h2>${listId ? "Editar lista" : "Nueva lista"}</h2>
+      <div class="field"><label>Nombre</label><input id="sl-name" value="${esc(base.name || "")}"></div>
+      <div class="field"><label>Zona DNSBL</label><input id="sl-zone" value="${esc(base.zone || "")}" placeholder="ej. zen.spamhaus.org"></div>
+      <div class="field"><label>Prioridad (0 = primera)</label><input id="sl-pri" type="number" value="${base.priority || 0}"></div>
+      <div class="field"><label><input type="checkbox" id="sl-enabled" ${base.enabled ? "checked" : ""}> Activa</label></div>
+      <div class="actions">
+        <button class="btn-ghost btn" id="sl-cancel">Cancelar</button>
+        <button class="btn-primary btn" id="sl-save">Guardar</button>
+      </div>`);
+    document.getElementById("sl-cancel").onclick = openSpamListsManager;
+    document.getElementById("sl-save").onclick = async () => {
+      const payload = {
+        name: document.getElementById("sl-name").value.trim(),
+        zone: document.getElementById("sl-zone").value.trim(),
+        list_type: "DNSBL",
+        enabled: document.getElementById("sl-enabled").checked,
+        priority: parseInt(document.getElementById("sl-pri").value) || 0,
+      };
+      try {
+        if (listId) await api(`/spam-lists/${listId}`, { method: "PUT", body: JSON.stringify(payload) });
+        else await api("/spam-lists", { method: "POST", body: JSON.stringify(payload) });
+        toast("Lista guardada", "ok");
+        openSpamListsManager();
+      } catch (e) { toast(e.message, "error"); }
     };
   }
 }
@@ -990,15 +1391,84 @@ function startNotifications() {
       const total = res.reduce((n, r) => n + (r.unread || 0), 0);
       const badge = document.getElementById("notif-badge");
       if (badge && !state.unreadOnly) badge.textContent = total ? total : "";
-      if (total > 0) toast(`📬 ${total} correo(s) sin leer`, "ok");
+    } catch (e) {}
+    try {
+      const res = await api("/notifications/new");
+      const items = res.items || [];
+      if (!state.notifiedSeeded) {
+        items.forEach(it => state.notified.add(it.account_id + ":" + it.uid));
+        state.notifiedSeeded = true;
+        return;
+      }
+      items.forEach(it => {
+        const k = it.account_id + ":" + it.uid;
+        if (!state.notified.has(k)) {
+          state.notified.add(k);
+          showMailNotification(it);
+        }
+      });
+      if (state.notified.size > 300) {
+        state.notified = new Set([...state.notified].slice(-200));
+      }
     } catch (e) {}
   };
   tick();
   notifTimer = setInterval(tick, 60000);
 }
 
+function showMailNotification(item) {
+  const stack = document.getElementById("notif-stack");
+  if (!stack) return;
+  const card = document.createElement("div");
+  card.className = "notif-card";
+  const fromName = item.from_name || item.from_email || "";
+  card.innerHTML = `
+    <div class="notif-head">
+      <span class="notif-account">📬 ${esc(item.email)}</span>
+      <button class="notif-close" title="Cerrar">✕</button>
+    </div>
+    <div class="notif-from">${esc(fromName)} &lt;${esc(item.from_email)}&gt;</div>
+    <div class="notif-subject">${esc(item.subject)}</div>
+    <div class="notif-meta">${esc(item.date)}</div>
+    <div class="notif-preview">${esc(item.preview)}</div>`;
+  card.querySelector(".notif-close").onclick = e => {
+    e.stopPropagation();
+    card.remove();
+  };
+  card.onclick = async () => {
+    card.remove();
+    try {
+      await openAccountInbox(item.account_id, item.uid);
+    } catch (e) { toast(e.message, "error"); }
+  };
+  stack.appendChild(card);
+  setTimeout(() => card.remove(), 20000);
+  while (stack.children.length > 5) stack.firstChild.remove();
+}
+
+async function openAccountInbox(accountId, uid) {
+  if (accountId !== state.currentAccountId || state.currentFolder !== "INBOX") {
+    state.currentAccountId = accountId;
+    state.currentFolder = "INBOX";
+    state.page = 1;
+    state.q = "";
+    state.unreadOnly = false;
+    const fa = state.foldersByAccount[accountId] || { folders: [], delimiter: "/" };
+    state.folders = fa.folders;
+    state.folderDelimiter = fa.delimiter;
+    state.expandedFolders = state.expandedByAccount[accountId] || {};
+    const sb = document.getElementById("sidebar");
+    if (sb) sb.classList.remove("open");
+    renderSidebar();
+    await loadMessages();
+    renderContent();
+  }
+  await openMessage(String(uid));
+}
+
 /* ============================================================ init */
 (async function init() {
+  applyWallpaper();
   if (!state.token) {
     renderLogin();
     hideSplash();

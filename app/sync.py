@@ -8,6 +8,7 @@ from html import escape
 
 from .crypto import decrypt_secret
 from .db import get_conn
+from .filters import apply_filters, extract_sender_ip
 from .imap_client import (
     IMAPClient,
     IMAPError,
@@ -292,15 +293,16 @@ def _insert_many(account_id, folder, items):
                 1 if "\\Draft" in meta else 0,
                 1 if p["attachments"] else 0,
                 _safe(p["body_html"]), _safe(p["body_text"]), p["size"],
+                extract_sender_ip(raw),
             ])
         if not data:
             return 0
         sql = """INSERT INTO HUBMAIL_Messages
                (AccountID, Folder, UID, MessageIdHeader, InReplyTo, FromName, FromEmail,
                 ToText, CcText, Subject, DateSent, Seen, Answered, Flagged, Deleted, Draft,
-                HasAttachments, BodyHtml, BodyText, Size)
+                HasAttachments, BodyHtml, BodyText, Size, SenderIP)
                VALUES
-                (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s,%s)"""
+                (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s,%s,%s)"""
         try:
             cur.executemany(sql, data)
         except Exception as e:
@@ -446,6 +448,11 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
                     updated += _update_body_many(account_id, folder, chunk)
             except Exception as e:
                 print(f"[SYNC] error fetch body {account_id}/{folder}: {e}", flush=True)
+        if with_bodies and new_uids:
+            try:
+                apply_filters(account_id, folder, new_uids, imap)
+            except Exception as e:
+                print(f"[SYNC] filtros {account_id}/{folder}: {e}", flush=True)
         try:
             _update_flags(account_id, folder, flags_map)
         except Exception as e:
