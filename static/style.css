@@ -364,6 +364,40 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
   font-size: 13px;
 }
 .contact-item .c-email { color: var(--muted); }
+.contacts-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.contacts-toolbar input { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 13px; }
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 58vh;
+}
+.contacts-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+.contacts-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eef2f8;
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 11px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.contacts-table td { padding: 8px 12px; border-bottom: 1px solid #eef1f6; vertical-align: middle; }
+.contacts-table tbody tr:hover { background: #f5f8fc; }
+.contacts-table .td-name { font-weight: 600; }
+.contacts-table .td-email { color: var(--muted); }
+.contacts-table .td-actions { white-space: nowrap; text-align: right; }
+.contacts-table .th-actions { text-align: right; }
+.badge-origin { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.badge-user { background: #e3f0ff; color: #1a5fb4; }
+.badge-auto { background: #e9f7e7; color: #2f7d20; }
+.badge-saved { background: #f3ecfb; color: #7a3cb0; }
+.contacts-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.ct-count { font-size: 11px; color: var(--muted); }
 .admin-hint { color: var(--muted); font-size: 12px; margin-bottom: 10px; background: rgba(0,0,0,.04); padding: 8px 10px; border-radius: 8px; }
 .assign-row { padding: 6px 4px; border-bottom: 1px solid #eef1f6; font-size: 13px; }
 .assign-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; }

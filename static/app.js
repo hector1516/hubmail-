@@ -1053,57 +1053,77 @@ async function openContactsManager(pickMode = false) {
     return toast(e.message, "error");
   }
   hideLoading();
-  const usersHtml = data.users.map(u =>
-    `<div class="contact-item">
-      <div><b>${esc(u.name)}</b><div class="c-email">${esc(u.email)}</div></div>
-      <button class="btn-ghost btn btn-sm" data-email="${esc(u.email)}">Usar</button>
-    </div>`).join("") || `<div class="empty">Sin usuarios activos</div>`;
-  const contactsHtml = data.contacts.map(c =>
-    `<div class="contact-item">
-      <div><b>${esc(c.name)}</b><div class="c-email">${esc(c.email)}</div></div>
-      <div>
-        ${pickMode ? `<button class="btn-ghost btn btn-sm" data-email="${esc(c.email)}">Usar</button>` : ""}
-        <button class="btn-ghost btn btn-sm" data-edit="${c.id}" title="Editar">✎</button>
-        <button class="btn-danger btn btn-sm" data-del="${c.id}" title="Eliminar">✕</button>
-      </div>
-    </div>`).join("") || `<div class="empty">Sin contactos recopilados</div>`;
-  const addrHtml = (data.addressbook || []).map(a =>
-    `<div class="contact-item">
-      <div><b>${esc(a.name || a.email)}</b><div class="c-email">${esc(a.email)}</div></div>
-      ${pickMode ? `<button class="btn-ghost btn btn-sm" data-email="${esc(a.email)}">Usar</button>` : ""}
-    </div>`).join("") || `<div class="empty">Aún sin contactos automáticos (se recopilan de tus correos recibidos y enviados)</div>`;
+  const rows = [];
+  (data.users || []).forEach(u => rows.push({ kind: "user", name: u.name, email: u.email }));
+  (data.addressbook || []).forEach(a => rows.push({ kind: "auto", name: a.name || a.email, email: a.email }));
+  (data.contacts || []).forEach(c => rows.push({ kind: "saved", id: c.id, name: c.name, email: c.email }));
+
+  const originBadge = kind =>
+    kind === "user" ? '<span class="badge-origin badge-user">ECCSA</span>'
+    : kind === "auto" ? '<span class="badge-origin badge-auto">Recopilado</span>'
+    : '<span class="badge-origin badge-saved">Guardado</span>';
 
   openModal(`
     <h2>Contactos</h2>
-    <h3 class="sec-title">Usuarios ECCSA</h3>
-    ${usersHtml}
-    <h3 class="sec-title">Recopilados automáticamente</h3>
-    ${addrHtml}
-    <h3 class="sec-title">Contactos guardados</h3>
-    ${contactsHtml}
-    <div class="actions">
-      <button class="btn-ghost btn" id="ct-new">+ Agregar</button>
+    <div class="contacts-toolbar">
+      <input id="ct-search" placeholder="🔍 Buscar por nombre o correo…">
+      <button class="btn-primary btn" id="ct-new">+ Agregar</button>
+    </div>
+    <div class="table-wrap">
+      <table class="contacts-table">
+        <thead><tr><th>Nombre</th><th>Correo</th><th>Origen</th><th class="th-actions">Acciones</th></tr></thead>
+        <tbody id="ct-tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="ct-empty" style="display:none">Sin resultados</div>
+    <div class="contacts-foot">
+      <span class="ct-count" id="ct-count"></span>
       <span class="spacer"></span>
       <button class="btn-ghost btn" id="ct-close">Cerrar</button>
-    </div>`);
+    </div>`, "modal-wide");
+
+  const tbody = document.getElementById("ct-tbody");
+  const countEl = document.getElementById("ct-count");
+  const emptyEl = document.getElementById("ct-empty");
+
+  const renderRows = q => {
+    const term = (q || "").toLowerCase().trim();
+    const filtered = rows.filter(r =>
+      !term || r.name.toLowerCase().includes(term) || r.email.toLowerCase().includes(term));
+    tbody.innerHTML = filtered.map(r => {
+      const actions = [];
+      if (pickMode) actions.push(`<button class="btn-ghost btn btn-sm" data-act="use" data-email="${esc(r.email)}">Usar</button>`);
+      if (r.kind === "saved") {
+        actions.push(`<button class="btn-ghost btn btn-sm" data-act="edit" data-id="${r.id}" title="Editar">✎</button>`);
+        actions.push(`<button class="btn-danger btn btn-sm" data-act="del" data-id="${r.id}" title="Eliminar">🗑</button>`);
+      }
+      return `<tr>
+        <td class="td-name">${esc(r.name)}</td>
+        <td class="td-email">${esc(r.email)}</td>
+        <td>${originBadge(r.kind)}</td>
+        <td class="td-actions">${actions.join("")}</td>
+      </tr>`;
+    }).join("");
+    countEl.textContent = `${filtered.length} de ${rows.length} contactos`;
+    emptyEl.style.display = filtered.length ? "none" : "";
+  };
+  renderRows("");
 
   document.getElementById("ct-close").onclick = closeModal;
   document.getElementById("ct-new").onclick = () => openContactForm(null, pickMode);
-  document.querySelectorAll("[data-email]").forEach(b => {
-    b.onclick = () => { closeModal(); useContact(b.dataset.email); };
-  });
-  document.querySelectorAll("[data-edit]").forEach(b => {
-    b.onclick = () => openContactForm(data.contacts.find(x => x.id === parseInt(b.dataset.edit)), pickMode);
-  });
-  document.querySelectorAll("[data-del]").forEach(b => {
-    b.onclick = async () => {
-      if (!confirm("¿Eliminar este contacto recopilado?")) return;
-      try {
-        await api(`/contacts/${b.dataset.del}`, { method: "DELETE" });
-        toast("Contacto eliminado", "ok");
-      } catch (e) { toast(e.message, "error"); }
-      openContactsManager(pickMode);
-    };
+  document.getElementById("ct-search").oninput = e => renderRows(e.target.value);
+  tbody.addEventListener("click", e => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const { act, email, id } = btn.dataset;
+    if (act === "use") { closeModal(); useContact(email); }
+    else if (act === "edit") openContactForm(data.contacts.find(x => x.id === parseInt(id)), pickMode);
+    else if (act === "del") {
+      if (!confirm("¿Eliminar este contacto?")) return;
+      api(`/contacts/${id}`, { method: "DELETE" })
+        .then(() => { toast("Contacto eliminado", "ok"); openContactsManager(pickMode); })
+        .catch(e => toast(e.message, "error"));
+    }
   });
 }
 
