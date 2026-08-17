@@ -358,6 +358,14 @@ function showWelcome(d) {
     ? `<div class="wm-resume">Este es tu resumen desde <b>${fmtDt(d.last_login)}</b>:</div>`
     : `<div class="wm-resume">Este es tu resumen de pendientes al día de hoy:</div>`;
 
+  const activityHtml = (d.activity || []).map(a =>
+    `<div class="activity-item">
+      <span class="activity-user">${esc(a.user)}</span>
+      <span class="activity-text">${esc(a.details)}</span>
+      <span class="activity-account">${esc(a.account)}</span>
+      <span class="activity-time">${fmtDt(a.created_at)}</span>
+    </div>`).join("");
+
   const bodyHtml = total === 0
     ? `<div class="wm-clear">🎉 ¡Cero pendientes, ${firstName}! Tu bandeja está tan en paz que casi se oyen mariposas. Disfrútalo mientras dure. 🦋</div>`
     : `${resumeHtml}
@@ -367,7 +375,8 @@ function showWelcome(d) {
         <div class="wm-stat"><div class="wm-num">${(d.preview || []).length}</div><div>recientes</div></div>
       </div>
       ${foldersHtml ? `<div class="wm-folders">${foldersHtml}</div>` : ""}
-      ${previewHtml ? `<div class="wm-section">Recientes sin leer:</div><div class="wm-preview">${previewHtml}</div>` : ""}`;
+      ${previewHtml ? `<div class="wm-section">Recientes sin leer:</div><div class="wm-preview">${previewHtml}</div>` : ""}
+      ${activityHtml ? `<div class="wm-section">Actividad reciente en tus cuentas:</div><div class="wm-preview wm-activity">${activityHtml}</div>` : ""}`;
 
   const noteHtml = `<div class="wm-note">🧹 Nota del sistema: Spam, Basura y Papelera se autolimpian cada día, como buenos ciudadanos. Ahí solo viven los últimos 10 correos y nada mayor a una semana. La limpieza es cortesía de HUBMail; el resto es tu problema. 😌</div>`;
 

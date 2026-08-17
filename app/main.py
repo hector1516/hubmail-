@@ -417,12 +417,31 @@ def welcome_summary(user=Depends(get_current_user)):
                 "date": r["MsgDate"],
                 "account": emails.get(r["AccountID"], ""),
             })
+        cur.execute(
+            "SELECT a.UserName, a.Action, a.Details, a.CreatedAt, a.AccountID "
+            f"FROM HUBMAIL_ActivityLog a "
+            f"WHERE a.AccountID IN ({ph}) "
+            "ORDER BY a.CreatedAt DESC, a.LogID DESC "
+            "LIMIT 10",
+            tuple(ids),
+        )
+        activity = [
+            {
+                "user": r["UserName"] or "",
+                "action": r["Action"],
+                "details": r["Details"] or "",
+                "created_at": r["CreatedAt"],
+                "account": emails.get(r["AccountID"], ""),
+            }
+            for r in cur.fetchall()
+        ]
         return {
             "first_login": last_login is None,
             "last_login": last_login,
             "total_unread": total,
             "folders": folders[:12],
             "preview": preview,
+            "activity": activity,
         }
     finally:
         conn.close()
