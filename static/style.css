@@ -646,7 +646,9 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
   #btn-menu { display: inline-block; }
   main { flex-direction: column; }
   .gutter { display: none; }
-  #list-pane { width: 100%; min-width: 0; }
+  #list-pane { width: 100%; min-width: 0; flex: 1; min-height: 0; }
+  #list-pane #message-list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  #list-pane .pager { flex-shrink: 0; }
   #detail-pane { position: fixed; inset: calc(var(--header-h) + env(safe-area-inset-top, 0px)) 0 env(safe-area-inset-bottom, 0px) 0; z-index: 15; background: rgba(255, 255, 255, .93); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: none; overflow-y: auto; }
   #detail-pane.open { display: flex; }
   .modal-grid { grid-template-columns: 1fr; }
