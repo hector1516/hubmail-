@@ -557,10 +557,46 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
             _update_sync_state(account_id, folder)
         except Exception as e:
             print(f"[SYNC] error syncstate {account_id}/{folder}: {e}", flush=True)
+        if new > 0 and folder == "INBOX":
+            try:
+                _push_new_mail(account_id, new_uids)
+            except Exception as e:
+                print(f"[SYNC] error push {account_id}: {e}", flush=True)
         print(f"[SYNC] {account_id}/{folder}: fin new={new} updated={updated} total={len(uids)}", flush=True)
         return {"new": new, "updated": updated, "total": len(uids)}
     finally:
         lock.release()
+
+
+def _push_new_mail(account_id, new_uids):
+    from .push import notify_new_mail
+
+    if not new_uids:
+        return
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT DISTINCT UserID FROM HUBMAIL_Accounts "
+            "WHERE AccountID=%s OR CanonicalAccountID=%s",
+            (account_id, account_id),
+        )
+        user_ids = [r["UserID"] for r in cur.fetchall()]
+        cur.execute(
+            "SELECT FromName, FromEmail, Subject FROM HUBMAIL_Messages "
+            "WHERE AccountID=%s AND Folder='INBOX' AND UID IN (%s) "
+            "ORDER BY DateSent DESC LIMIT 1"
+            % (account_id, ",".join("%s" for _ in new_uids)),
+            tuple(new_uids),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return
+    sender = row["FromName"] or row["FromEmail"] or "Nuevo correo"
+    subject = row["Subject"] or "(sin asunto)"
+    notify_new_mail(user_ids, f"HUBMail · {sender}", subject)
 
 
 def sync_folder(account_id, folder, force=False, with_bodies=True):

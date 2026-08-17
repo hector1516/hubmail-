@@ -420,6 +420,7 @@ async function boot() {
     renderShell();
     startNotifications();
     startFolderRefresh();
+    initPushNotifications();
     maybeShowWelcome();
   } catch (e) {
     toast(e.message, "error");
@@ -2067,6 +2068,42 @@ function openSpamListForm(listId) {
 
 /* ============================================================ notifications */
 let notifTimer = null;
+
+async function initPushNotifications() {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    const cfg = await api("/push/config");
+    if (!cfg || !cfg.vapid_public_key) return;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      if (Notification && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
+      if (Notification && Notification.permission !== "granted") return;
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(cfg.vapid_public_key),
+      });
+    }
+    if (sub) {
+      const j = sub.toJSON();
+      await api("/push/subscribe", {
+        method: "POST",
+        body: JSON.stringify({ endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }),
+      });
+    }
+  } catch (e) {}
+}
+
+function urlBase64ToUint8Array(b64) {
+  const pad = b64.replace(/=+$/, "");
+  const raw = atob(pad.replace(/-/g, "+").replace(/_/g, "/"));
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
 function startNotifications() {
   if (notifTimer) clearInterval(notifTimer);
   const tick = async () => {

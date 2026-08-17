@@ -1835,6 +1835,33 @@ def health():
     return {"status": "ok"}
 
 
+class PushSubscriptionPayload(BaseModel):
+    endpoint: str
+    p256dh: str
+    auth: str
+
+
+@app.get("/api/push/config")
+def push_config():
+    return {"vapid_public_key": settings.vapid_public_key}
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe(payload: PushSubscriptionPayload, user=Depends(get_current_user)):
+    from .push import subscribe as _subscribe
+
+    _subscribe(user["id"], payload.endpoint, payload.p256dh, payload.auth)
+    return {"ok": True}
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe(payload: PushSubscriptionPayload, user=Depends(get_current_user)):
+    from .push import unsubscribe as _unsubscribe
+
+    _unsubscribe(payload.endpoint)
+    return {"ok": True}
+
+
 class NoCacheStaticFiles(StarletteStaticFiles):
     def file_response(self, full_path, stat_result, scope, status_code=200):
         response = super().file_response(full_path, stat_result, scope, status_code)

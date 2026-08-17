@@ -21,6 +21,9 @@ class Settings:
     default_imap_port: int
     default_smtp_host: str
     default_smtp_port: int
+    vapid_public_key: str
+    vapid_private_key: str
+    vapid_subject: str
 
 
 def get_settings() -> Settings:
@@ -42,6 +45,9 @@ def get_settings() -> Settings:
         default_imap_port=int(os.getenv("HUBMAIL_IMAP_PORT", "993")),
         default_smtp_host=os.getenv("HUBMAIL_SMTP_HOST", "smtpout.secureserver.net"),
         default_smtp_port=int(os.getenv("HUBMAIL_SMTP_PORT", "465")),
+        vapid_public_key=os.getenv("HUBMAIL_VAPID_PUBLIC", "BMutVGBRlPlW5LUEe2SW0MPKbikLMP95Oya1JLGtcsv9gSrABaZDYtejHhJXo1TOdzJD1e0Bdj3wt5SPjUaK6fQ"),
+        vapid_private_key=os.getenv("HUBMAIL_VAPID_PRIVATE", "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgC55h9YhmoWFKQrj8k2PEOXwK7JGEn96YrNVCgu34T2OhRANCAATLrVRgUZT5VuS1BHtkltDDym4pCzD_eTsmtSSxrXLL_YEqwAWmQ2LXox4SV6NUzncyQ9XtAXY98LeUj41Giun0"),
+        vapid_subject=os.getenv("HUBMAIL_VAPID_SUBJECT", "mailto:it@ecc-sa.com.mx"),
     )
 
 
