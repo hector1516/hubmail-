@@ -524,8 +524,9 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
             return {"new": 0, "updated": 0, "total": 0}
 
         existing = _load_existing(account_id, folder)
-        new_uids = [u for u in uids if u not in existing]
-        missing_body = [u for u in uids if u in existing and (not existing[u]["has_body"] or existing[u]["needs_full"])]
+        pending = _pending_uids(account_id, folder)
+        new_uids = [u for u in uids if u not in existing and u not in pending]
+        missing_body = [u for u in uids if u in existing and (not existing[u]["has_body"] or existing[u]["needs_full"]) and u not in pending]
 
         new = updated = 0
         if new_uids:
@@ -548,6 +549,7 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
             except Exception as e:
                 print(f"[SYNC] filtros {account_id}/{folder}: {e}", flush=True)
         try:
+            flags_map = {u: fl for u, fl in flags_map.items() if u not in pending}
             _update_flags(account_id, folder, flags_map)
         except Exception as e:
             print(f"[SYNC] error flags {account_id}/{folder}: {e}", flush=True)
@@ -664,6 +666,248 @@ def _save_folders(account_id, delimiter, folders):
         conn.close()
 
 
+def _enqueue_op(account_id, op_type, folder, uid, value=None, dest_folder=None, dest_account_id=None, msgid=None):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO HUBMAIL_PendingOps (AccountID, OpType, Folder, UID, Value, DestFolder, DestAccountID, MsgId) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (account_id, op_type, folder, int(uid), value, dest_folder, dest_account_id, msgid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_op_status(op_id, status, error=None):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE HUBMAIL_PendingOps SET Status=%s, Error=%s WHERE OpID=%s",
+            (status, error, op_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_update_flags(account_id, folder, uid, seen=None, flagged=None):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        if seen is not None:
+            cur.execute(
+                "UPDATE HUBMAIL_Messages SET Seen=%s WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (1 if seen else 0, account_id, folder, uid),
+            )
+        if flagged is not None:
+            cur.execute(
+                "UPDATE HUBMAIL_Messages SET Flagged=%s WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (1 if flagged else 0, account_id, folder, uid),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_delete_messages(account_id, folder, uids):
+    if not uids:
+        return
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        for uid in uids:
+            cur.execute(
+                "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (account_id, folder, int(uid)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_get_message_id(account_id, folder, uid):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT MessageIdHeader FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (account_id, folder, uid),
+        )
+        row = cur.fetchone()
+        return row["MessageIdHeader"] if row else None
+    finally:
+        conn.close()
+
+
+def _db_move_message(account_id, folder, uid, dest, new_uid=None):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        if new_uid:
+            cur.execute(
+                "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (account_id, dest, new_uid),
+            )
+            cur.execute(
+                "UPDATE HUBMAIL_Messages SET Folder=%s, UID=%s "
+                "WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (dest, new_uid, account_id, folder, uid),
+            )
+        else:
+            cur.execute(
+                "UPDATE HUBMAIL_Messages SET Folder=%s WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (dest, account_id, folder, uid),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_cross_move_message(src_account_id, src_folder, uid, dst_account_id, dst_folder, new_uid, seen):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT MessageIdHeader, InReplyTo, FromName, FromEmail, ToText, CcText, Subject, "
+            "DateSent, Answered, Flagged, HasAttachments, BodyHtml, BodyText, Size, Spam, SenderIP "
+            "FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (src_account_id, src_folder, uid),
+        )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (dst_account_id, dst_folder, new_uid),
+            )
+            cur.execute(
+                "INSERT INTO HUBMAIL_Messages (AccountID, Folder, UID, MessageIdHeader, InReplyTo, "
+                "FromName, FromEmail, ToText, CcText, Subject, DateSent, Seen, Answered, Flagged, "
+                "HasAttachments, BodyHtml, BodyText, Size, Spam, SenderIP) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (dst_account_id, dst_folder, new_uid, row["MessageIdHeader"], row["InReplyTo"],
+                 row["FromName"], row["FromEmail"], row["ToText"], row["CcText"], row["Subject"],
+                 row["DateSent"], seen, row["Answered"], row["Flagged"], row["HasAttachments"],
+                 row["BodyHtml"], row["BodyText"], row["Size"], row["Spam"], row["SenderIP"]),
+            )
+            cur.execute(
+                "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (dst_account_id, dst_folder, new_uid),
+            )
+            cur.execute(
+                "SELECT Name, ContentType, Cid, Size, Data FROM HUBMAIL_Attachments "
+                "WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (src_account_id, src_folder, uid),
+            )
+            atts = cur.fetchall()
+            if atts:
+                cur.executemany(
+                    "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    [
+                        (dst_account_id, dst_folder, new_uid, a["Name"], a["ContentType"], a["Cid"],
+                         a["Size"], a["Data"])
+                        for a in atts
+                    ],
+                )
+        cur.execute(
+            "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (src_account_id, src_folder, uid),
+        )
+        cur.execute(
+            "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (src_account_id, src_folder, uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _pending_uids(account_id, folder):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT UID FROM HUBMAIL_PendingOps WHERE AccountID=%s AND Folder=%s AND Status='pending'",
+            (account_id, folder),
+        )
+        return {int(r[0]) for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def _fix_move_uid(account_id, dest_folder, msgid, new_uid):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
+            (account_id, dest_folder, new_uid),
+        )
+        cur.execute(
+            "UPDATE HUBMAIL_Messages SET UID=%s WHERE AccountID=%s AND Folder=%s AND MessageIdHeader=%s",
+            (new_uid, account_id, dest_folder, msgid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _apply_cross_move(src_account_id, op, simap):
+    dst = _get_account_row(op["DestAccountID"])
+    if not dst:
+        raise IMAPError("Cuenta destino no existe")
+    raw, flags = simap.fetch_raw_with_flags(op["Folder"], str(op["UID"]))
+    dimap = IMAPClient(dst["IMAPHost"], dst["IMAPPort"], dst["Username"], decrypt_secret(dst["PasswordEnc"]))
+    try:
+        dimap.connect()
+        new_uid = dimap.append_message(op["DestFolder"], raw, flags)
+        simap.delete_message(op["Folder"], str(op["UID"]))
+    finally:
+        dimap.close()
+    seen = 1 if "\\Seen" in flags else 0
+    _db_cross_move_message(src_account_id, op["Folder"], op["UID"], op["DestAccountID"], op["DestFolder"], int(new_uid), seen)
+
+
+def _apply_pending_ops(account_id, imap):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT * FROM HUBMAIL_PendingOps WHERE AccountID=%s AND Status='pending' ORDER BY OpID",
+            (account_id,),
+        )
+        ops = cur.fetchall()
+    finally:
+        conn.close()
+    for op in ops:
+        try:
+            if op["OpType"] in ("seen", "flag"):
+                flag = "\\Seen" if op["OpType"] == "seen" else "\\Flagged"
+                imap.set_flag(op["Folder"], str(op["UID"]), flag, bool(op["Value"]))
+            elif op["OpType"] == "delete":
+                imap.delete_message(op["Folder"], str(op["UID"]))
+            elif op["OpType"] == "move":
+                imap.move_message(op["Folder"], str(op["UID"]), op["DestFolder"])
+                new_uid = None
+                if op.get("MsgId"):
+                    new_uid = imap.find_uid_by_message_id(op["DestFolder"], op["MsgId"])
+                if not new_uid:
+                    new_uid = imap.last_uid(op["DestFolder"])
+                if op.get("MsgId"):
+                    _fix_move_uid(account_id, op["DestFolder"], op["MsgId"], int(new_uid))
+                else:
+                    _db_move_message(account_id, op["Folder"], op["UID"], op["DestFolder"], int(new_uid))
+            elif op["OpType"] == "cross_move":
+                _apply_cross_move(account_id, op, imap)
+            _set_op_status(op["OpID"], "done")
+        except Exception as e:
+            print(f"[SYNC] op {op['OpID']} ({op['OpType']}) falló: {e}", flush=True)
+            _set_op_status(op["OpID"], "failed", str(e)[:500])
+
+
 def sync_account(account_id):
     account_id = canonical_account_id(account_id)
     acc = _get_account_row(account_id)
@@ -675,6 +919,10 @@ def sync_account(account_id):
     imap = IMAPClient(acc["IMAPHost"], acc["IMAPPort"], acc["Username"], decrypt_secret(acc["PasswordEnc"]))
     try:
         imap.connect()
+        try:
+            _apply_pending_ops(account_id, imap)
+        except Exception as e:
+            print(f"[SYNC] account {account_id}: error aplicando ops pendientes: {e}", flush=True)
         lf = imap.list_folders()
         folders = lf["folders"]
         _save_folders(account_id, lf["delimiter"], folders)

@@ -856,7 +856,7 @@ async function doMoveDrop(destAccId, destFolder) {
   const uids = state.selected.has(src.uid) ? Array.from(state.selected) : [src.uid];
   showLoading("Moviendo mensaje…");
   try {
-    await api("/messages/move", {
+    const res = await api("/messages/move", {
       method: "POST",
       body: JSON.stringify({
         source_account_id: src.accountId,
@@ -867,7 +867,13 @@ async function doMoveDrop(destAccId, destFolder) {
       }),
     });
     state.selected.clear();
-    toast(uids.length === 1 ? "Mensaje movido" : `${uids.length} mensajes movidos`, "ok");
+    const queued = !!(res && res.queued);
+    toast(
+      uids.length === 1
+        ? (queued ? "Movimiento encolado, se aplicará en la próxima sincronización" : "Mensaje movido")
+        : `${uids.length} mensajes movidos${queued ? " (se aplicará en la próxima sincronización)" : ""}`,
+      "ok"
+    );
     await loadMessages();
     await loadUnreadCounts();
     loadActivity();

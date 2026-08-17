@@ -1046,25 +1046,6 @@ def get_message(
     return _msg_detail_row(row, attachments)
 
 
-def _db_update_flags(account_id, folder, uid, seen=None, flagged=None):
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        if seen is not None:
-            cur.execute(
-                "UPDATE HUBMAIL_Messages SET Seen=%s WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (1 if seen else 0, account_id, folder, uid),
-            )
-        if flagged is not None:
-            cur.execute(
-                "UPDATE HUBMAIL_Messages SET Flagged=%s WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (1 if flagged else 0, account_id, folder, uid),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
 @app.patch("/api/accounts/{account_id}/messages/{msgid}")
 def message_action(
     account_id: int,
@@ -1077,85 +1058,27 @@ def message_action(
     acc = _canonical_row(_get_account(user, account_id))
     account_id = acc["AccountID"]
     uid = int(msgid)
-    try:
-        with _imap_for(acc) as imap:
-            if action in ("read", "unread"):
-                imap.set_flag(folder, msgid, "\\Seen", action == "read")
-                _db_update_flags(account_id, folder, uid, seen=action == "read")
-            elif action in ("flag", "unflag"):
-                imap.set_flag(folder, msgid, "\\Flagged", action == "flag")
-                _db_update_flags(account_id, folder, uid, flagged=action == "flag")
-            elif action == "notspam":
-                filtmod._db_set_spam(account_id, uid, False)
-            elif action == "delete":
-                imap.delete_message(folder, msgid)
-                _db_delete_messages(account_id, folder, [msgid])
-            elif action == "move":
-                if not dest:
-                    raise HTTPException(400, "Falta carpeta destino")
-                imap.move_message(folder, msgid, dest)
-                _db_move_message(account_id, folder, uid, dest)
-            else:
-                raise HTTPException(400, "Acción no válida")
-    except IMAPError as e:
-        raise HTTPException(400, str(e))
+    if action in ("read", "unread"):
+        syncmod._db_update_flags(account_id, folder, uid, seen=action == "read")
+        syncmod._enqueue_op(account_id, "seen", folder, uid, value=1 if action == "read" else 0)
+    elif action in ("flag", "unflag"):
+        syncmod._db_update_flags(account_id, folder, uid, flagged=action == "flag")
+        syncmod._enqueue_op(account_id, "flag", folder, uid, value=1 if action == "flag" else 0)
+    elif action == "notspam":
+        filtmod._db_set_spam(account_id, uid, False)
+    elif action == "delete":
+        syncmod._db_delete_messages(account_id, folder, [msgid])
+        syncmod._enqueue_op(account_id, "delete", folder, uid)
+    elif action == "move":
+        if not dest:
+            raise HTTPException(400, "Falta carpeta destino")
+        syncmod._db_move_message(account_id, folder, uid, dest)
+        syncmod._enqueue_op(account_id, "move", folder, uid, dest_folder=dest)
+    else:
+        raise HTTPException(400, "Acción no válida")
     _log_activity(user, account_id, action,
                   f"{'Marcó como leído' if action == 'read' else 'Marcó como no leído' if action == 'unread' else 'Marcó con bandera' if action == 'flag' else 'Quitó bandera' if action == 'unflag' else 'Marcó como no spam' if action == 'notspam' else 'Eliminó' if action == 'delete' else f'Movío a {dest}'} (carpeta {folder}, UID {uid})")
-    return {"ok": True}
-
-
-def _db_delete_messages(account_id, folder, uids):
-    if not uids:
-        return
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        for uid in uids:
-            cur.execute(
-                "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (account_id, folder, int(uid)),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _db_get_message_id(account_id, folder, uid):
-    conn = get_conn()
-    try:
-        cur = conn.cursor(as_dict=True)
-        cur.execute(
-            "SELECT MessageIdHeader FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
-            (account_id, folder, uid),
-        )
-        row = cur.fetchone()
-        return row["MessageIdHeader"] if row else None
-    finally:
-        conn.close()
-
-
-def _db_move_message(account_id, folder, uid, dest, new_uid=None):
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        if new_uid:
-            cur.execute(
-                "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (account_id, dest, new_uid),
-            )
-            cur.execute(
-                "UPDATE HUBMAIL_Messages SET Folder=%s, UID=%s "
-                "WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (dest, new_uid, account_id, folder, uid),
-            )
-        else:
-            cur.execute(
-                "UPDATE HUBMAIL_Messages SET Folder=%s WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (dest, account_id, folder, uid),
-            )
-        conn.commit()
-    finally:
-        conn.close()
+    return {"ok": True, "queued": True}
 
 
 @app.post("/api/messages/move")
@@ -1167,100 +1090,21 @@ def move_messages(payload: MoveMessagesPayload, user=Depends(get_current_user)):
     src_id, dst_id = src["AccountID"], dst["AccountID"]
 
     if src_id == dst_id:
-        try:
-            with _imap_for(src) as imap:
-                for uid in payload.uids:
-                    msgid = _db_get_message_id(src_id, payload.folder, int(uid))
-                    imap.move_message(payload.folder, uid, payload.dest_folder)
-                    new_uid = None
-                    if msgid:
-                        new_uid = imap.find_uid_by_message_id(payload.dest_folder, msgid)
-                    if not new_uid:
-                        new_uid = imap.last_uid(payload.dest_folder)
-                    _db_move_message(src_id, payload.folder, int(uid), payload.dest_folder, int(new_uid) if new_uid else None)
-        except IMAPError as e:
-            raise HTTPException(400, str(e))
+        for uid in payload.uids:
+            syncmod._db_move_message(src_id, payload.folder, int(uid), payload.dest_folder)
+            msgid = syncmod._db_get_message_id(src_id, payload.folder, int(uid))
+            syncmod._enqueue_op(src_id, "move", payload.folder, int(uid),
+                                dest_folder=payload.dest_folder, msgid=msgid)
         _log_activity(user, src_id, "move",
                       f"Movío {len(payload.uids)} correo(s) de '{payload.folder}' a '{payload.dest_folder}' (misma cuenta)")
-        return {"ok": True, "moved": len(payload.uids), "cross": False}
+        return {"ok": True, "queued": len(payload.uids), "cross": False}
 
-    moved = 0
-    try:
-        with _imap_for(src) as simap, _imap_for(dst) as dimap:
-            for uid in payload.uids:
-                raw, flags = simap.fetch_raw_with_flags(payload.folder, uid)
-                new_uid = dimap.append_message(payload.dest_folder, raw, flags)
-                simap.delete_message(payload.folder, uid)
-                seen = 1 if "\\Seen" in flags else 0
-                _db_cross_move_message(
-                    src_id, payload.folder, int(uid),
-                    dst_id, payload.dest_folder, int(new_uid), seen,
-                )
-                moved += 1
-    except IMAPError as e:
-        raise HTTPException(400, f"No se pudo mover entre cuentas: {e}")
+    for uid in payload.uids:
+        syncmod._enqueue_op(src_id, "cross_move", payload.folder, int(uid),
+                            dest_folder=payload.dest_folder, dest_account_id=dst_id)
     _log_activity(user, src_id, "move",
-                  f"Movío {moved} correo(s) de '{payload.folder}' a '{payload.dest_folder}' en la cuenta {dst['EmailAddress']} (entre cuentas)")
-    return {"ok": True, "moved": moved, "cross": True}
-
-
-def _db_cross_move_message(src_account_id, src_folder, uid, dst_account_id, dst_folder, new_uid, seen):
-    conn = get_conn()
-    try:
-        cur = conn.cursor(as_dict=True)
-        cur.execute(
-            "SELECT MessageIdHeader, InReplyTo, FromName, FromEmail, ToText, CcText, Subject, "
-            "DateSent, Answered, Flagged, HasAttachments, BodyHtml, BodyText, Size, Spam, SenderIP "
-            "FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
-            (src_account_id, src_folder, uid),
-        )
-        row = cur.fetchone()
-        if row:
-            cur.execute(
-                "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (dst_account_id, dst_folder, new_uid),
-            )
-            cur.execute(
-                "INSERT INTO HUBMAIL_Messages (AccountID, Folder, UID, MessageIdHeader, InReplyTo, "
-                "FromName, FromEmail, ToText, CcText, Subject, DateSent, Seen, Answered, Flagged, "
-                "HasAttachments, BodyHtml, BodyText, Size, Spam, SenderIP) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (dst_account_id, dst_folder, new_uid, row["MessageIdHeader"], row["InReplyTo"],
-                 row["FromName"], row["FromEmail"], row["ToText"], row["CcText"], row["Subject"],
-                 row["DateSent"], seen, row["Answered"], row["Flagged"], row["HasAttachments"],
-                 row["BodyHtml"], row["BodyText"], row["Size"], row["Spam"], row["SenderIP"]),
-            )
-            cur.execute(
-                "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (dst_account_id, dst_folder, new_uid),
-            )
-            cur.execute(
-                "SELECT Name, ContentType, Cid, Size, Data FROM HUBMAIL_Attachments "
-                "WHERE AccountID=%s AND Folder=%s AND UID=%s",
-                (src_account_id, src_folder, uid),
-            )
-            atts = cur.fetchall()
-            if atts:
-                cur.executemany(
-                    "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                    [
-                        (dst_account_id, dst_folder, new_uid, a["Name"], a["ContentType"], a["Cid"],
-                         a["Size"], a["Data"])
-                        for a in atts
-                    ],
-                )
-        cur.execute(
-            "DELETE FROM HUBMAIL_Messages WHERE AccountID=%s AND Folder=%s AND UID=%s",
-            (src_account_id, src_folder, uid),
-        )
-        cur.execute(
-            "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
-            (src_account_id, src_folder, uid),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+                  f"Movío {len(payload.uids)} correo(s) de '{payload.folder}' a '{payload.dest_folder}' en la cuenta {dst['EmailAddress']} (entre cuentas)")
+    return {"ok": True, "queued": len(payload.uids), "cross": True}
 
 
 @app.post("/api/accounts/{account_id}/messages/bulk-delete")
@@ -1269,15 +1113,12 @@ def bulk_delete(account_id: int, payload: BulkDeletePayload, user=Depends(get_cu
     account_id = acc["AccountID"]
     if not payload.ids:
         raise HTTPException(400, "No hay mensajes seleccionados")
-    try:
-        with _imap_for(acc) as imap:
-            imap.delete_messages(payload.folder, payload.ids)
-    except IMAPError as e:
-        raise HTTPException(400, str(e))
-    _db_delete_messages(account_id, payload.folder, payload.ids)
+    syncmod._db_delete_messages(account_id, payload.folder, payload.ids)
+    for uid in payload.ids:
+        syncmod._enqueue_op(account_id, "delete", payload.folder, int(uid))
     _log_activity(user, account_id, "bulk_delete",
                   f"Eliminó {len(payload.ids)} correo(s) de '{payload.folder}'")
-    return {"ok": True, "deleted": len(payload.ids)}
+    return {"ok": True, "deleted": len(payload.ids), "queued": True}
 
 
 @app.post("/api/accounts/{account_id}/messages/bulk-seen")
@@ -1286,16 +1127,12 @@ def bulk_set_seen(account_id: int, payload: BulkSeenPayload, user=Depends(get_cu
     account_id = acc["AccountID"]
     if not payload.ids:
         raise HTTPException(400, "No hay mensajes seleccionados")
-    try:
-        with _imap_for(acc) as imap:
-            imap.set_flags(payload.folder, payload.ids, "\\Seen", payload.seen)
-    except IMAPError as e:
-        raise HTTPException(400, str(e))
     for uid in payload.ids:
-        _db_update_flags(account_id, payload.folder, int(uid), seen=payload.seen)
+        syncmod._db_update_flags(account_id, payload.folder, int(uid), seen=payload.seen)
+        syncmod._enqueue_op(account_id, "seen", payload.folder, int(uid), value=1 if payload.seen else 0)
     _log_activity(user, account_id, "bulk_seen",
                   f"Marcó {len(payload.ids)} correo(s) como {'leído' if payload.seen else 'no leído'} en '{payload.folder}'")
-    return {"ok": True, "updated": len(payload.ids), "seen": payload.seen}
+    return {"ok": True, "updated": len(payload.ids), "seen": payload.seen, "queued": True}
 
 
 @app.post("/api/accounts/{account_id}/send")
