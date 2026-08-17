@@ -4,8 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#1a2b49">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HUBMail">
 <title>HUBMail</title>
 <link rel="icon" type="image/png" href="/engrane.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.json">
 <link rel="stylesheet" href="/style.css?v=26">
 </head>
 <body>
@@ -16,5 +22,12 @@
 <div id="splash"><img src="/engrane.png" alt="HUBMail" class="spin-logo"></div>
 <div id="loading-overlay" class="hidden"><div class="loader-box"><img src="/engrane.png" alt="Cargando" class="spin-logo small"><span id="loading-text">CargandoÃ¢â‚¬Â¦</span></div></div>
 <script src="/app.js?v=26"></script>
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+</script>
 </body>
 </html>
