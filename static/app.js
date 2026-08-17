@@ -975,6 +975,7 @@ function detailHtml(m) {
     </div>
     <div class="activity-box hidden" id="activity-box">
       <div class="activity-title">📋 Actividad de la cuenta</div>
+      <select class="activity-filter" id="activity-filter"><option value="">Todos los usuarios</option></select>
       <div class="activity-list">Cargando…</div>
     </div>`;
 }
@@ -992,8 +993,17 @@ async function loadActivity() {
   if (!box) return;
   box.classList.remove("hidden");
   try {
-    const d = await api(`/accounts/${state.currentAccountId}/activity?limit=15`);
+    const sel = document.getElementById("activity-filter");
+    const uf = sel && sel.value ? `&user_filter=${encodeURIComponent(sel.value)}` : "";
+    const d = await api(`/accounts/${state.currentAccountId}/activity?limit=15${uf}`);
     const items = d.items || [];
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Todos los usuarios</option>' +
+        (d.users || []).map(u => `<option value="${esc(u)}">${esc(u)}</option>`).join("");
+      if (cur && (d.users || []).includes(cur)) sel.value = cur;
+      sel.onchange = () => loadActivity();
+    }
     if (!items.length) {
       box.querySelector(".activity-list").innerHTML = `<div class="activity-empty">Sin actividad reciente en esta cuenta</div>`;
       return;

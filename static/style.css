@@ -325,6 +325,7 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 }
 .activity-box.hidden { display: none; }
 .activity-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 6px; }
+.activity-filter { width: 100%; margin-bottom: 6px; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); }
 .activity-item { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid #eef1f6; }
 .activity-item:last-child { border-bottom: none; }
 .activity-user { font-weight: 600; color: var(--primary); white-space: nowrap; }

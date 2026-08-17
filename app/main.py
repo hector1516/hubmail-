@@ -775,6 +775,7 @@ def account_activity(
     account_id: int,
     user=Depends(get_current_user),
     limit: int = Query(default=20, ge=1, le=100),
+    user_filter: str | None = Query(default=None),
 ):
     acc = _canonical_row(_get_account(user, account_id))
     cid = acc["AccountID"]
@@ -782,17 +783,27 @@ def account_activity(
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
+            "SELECT DISTINCT UserName FROM HUBMAIL_ActivityLog WHERE AccountID=%s AND UserName IS NOT NULL AND UserName<>''",
+            (cid,),
+        )
+        users = sorted(r["UserName"] for r in cur.fetchall())
+        sql = (
             "SELECT UserName, Action, Details, CreatedAt "
             "FROM HUBMAIL_ActivityLog "
             "WHERE AccountID=%s "
-            "ORDER BY CreatedAt DESC, LogID DESC",
-            (cid,),
         )
+        params = [cid]
+        if user_filter:
+            sql += "AND UserName=%s "
+            params.append(user_filter)
+        sql += "ORDER BY CreatedAt DESC, LogID DESC"
+        cur.execute(sql, tuple(params))
         rows = cur.fetchall()[:limit]
     finally:
         conn.close()
     return {
         "account_id": cid,
+        "users": users,
         "items": [
             {
                 "user": r["UserName"] or "",
