@@ -214,7 +214,7 @@ async function applyWallpaper() {
       document.body.style.backgroundImage = wall;
       document.body.style.backgroundSize = "cover";
       document.body.style.backgroundPosition = "center";
-      document.body.style.backgroundAttachment = window.innerWidth > 820 ? "fixed" : "scroll";
+      document.body.style.backgroundAttachment = window.innerWidth > 900 ? "fixed" : "scroll";
       const wrap = document.querySelector(".login-wrap");
       if (wrap) {
         wrap.style.setProperty("--wallpaper", wall);
@@ -655,12 +655,14 @@ function renderShell() {
       </header>
       <div class="body">
         <aside id="sidebar" style="width:${state.paneWidths.sidebar}px"></aside>
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
         <div class="gutter" id="gutter-side" title="Arrastrar para ajustar"></div>
         <main id="content"></main>
       </div>
     </div>`;
 
   document.getElementById("btn-menu").onclick = () => document.getElementById("sidebar").classList.toggle("open");
+  document.getElementById("sidebar-overlay").onclick = () => document.getElementById("sidebar").classList.remove("open");
   document.getElementById("btn-compose").onclick = () => openCompose();
   document.getElementById("btn-accounts").onclick = () => openAccountsModal();
   document.getElementById("btn-logout").onclick = logout;
@@ -675,7 +677,7 @@ function renderShell() {
   initGutter("gutter-side", "sidebar", "sidebar");
   renderSidebar();
   renderContent();
-  if (window.innerWidth <= 820) document.getElementById("sidebar").classList.add("open");
+  if (window.innerWidth <= 900) document.getElementById("sidebar").classList.add("open");
 }
 
 function buildFolderTree(folders, delimiter) {
