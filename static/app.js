@@ -640,6 +640,13 @@ function startFolderRefresh() {
   refreshTimer = setInterval(silentRefresh, 30000);
 }
 
+window.addEventListener("message", e => {
+  if (e.data && e.data.hmh) {
+    const f = document.querySelector(`.body-frame[data-hid="${e.data.hid}"]`);
+    if (f) f.style.height = (e.data.hmh + 24) + "px";
+  }
+});
+
 function renderShell() {
   app.innerHTML = `
     <div class="shell">
@@ -660,6 +667,14 @@ function renderShell() {
         <div class="gutter" id="gutter-side" title="Arrastrar para ajustar"></div>
         <main id="content"></main>
       </div>
+      <div class="activity-bar hidden" id="activity-bar">
+        <div class="activity-bar-head">
+          <button class="icon-btn btn-sm" id="activity-toggle" title="Mostrar/ocultar log">📋</button>
+          <span class="activity-title">Actividad de la cuenta</span>
+          <select class="activity-filter" id="activity-filter"><option value="">Todos los usuarios</option></select>
+        </div>
+        <div class="activity-list">Cargando…</div>
+      </div>
     </div>`;
 
   document.getElementById("btn-menu").onclick = () => document.getElementById("sidebar").classList.toggle("open");
@@ -678,6 +693,12 @@ function renderShell() {
   initGutter("gutter-side", "sidebar", "sidebar");
   renderSidebar();
   renderContent();
+  document.getElementById("activity-toggle").onclick = () => {
+    const bar = document.getElementById("activity-bar");
+    bar.classList.toggle("collapsed");
+    bar.querySelector(".activity-list").style.display = bar.classList.contains("collapsed") ? "none" : "";
+  };
+  loadActivity();
   if (window.innerWidth <= 900) document.getElementById("sidebar").classList.add("open");
 }
 
@@ -1102,6 +1123,8 @@ function detailHtml(m) {
     bodyHtml = bodyHtml.replace(new RegExp("cid:" + a.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), `data:${a.content_type};base64,${a.data}`);
   });
   bodyHtml = proxyImages(bodyHtml);
+  const fId = "bf-" + Math.random().toString(36).slice(2, 8);
+  const autoH = `<script>(function(){function r(){var h=document.documentElement.scrollHeight||document.body.scrollHeight;parent.postMessage({hmh:h,hid:"${fId}"},"*")}if(window.addEventListener){window.addEventListener("load",function(){setTimeout(r,40)});window.addEventListener("resize",r)}setTimeout(r,150)})()<\/script>`;
 
   return `
     <div class="detail-toolbar">
@@ -1122,12 +1145,7 @@ function detailHtml(m) {
       ${cc}
       <div class="detail-meta">Fecha: ${esc(m.date)}</div>
       ${atts}
-      <iframe class="body-frame" sandbox="" referrerpolicy="no-referrer" srcdoc="${esc(bodyHtml || "")}"></iframe>
-    </div>
-    <div class="activity-box hidden" id="activity-box">
-      <div class="activity-title">📋 Actividad de la cuenta</div>
-      <select class="activity-filter" id="activity-filter"><option value="">Todos los usuarios</option></select>
-      <div class="activity-list">Cargando…</div>
+      <iframe class="body-frame" data-hid="${fId}" sandbox="allow-scripts" referrerpolicy="no-referrer" srcdoc="${esc(bodyHtml + autoH || "")}"></iframe>
     </div>`;
 }
 
@@ -1140,9 +1158,8 @@ function renderDetail(m) {
 }
 
 async function loadActivity() {
-  const box = document.getElementById("activity-box");
-  if (!box) return;
-  box.classList.remove("hidden");
+  const bar = document.getElementById("activity-bar");
+  if (!bar) return;
   try {
     const sel = document.getElementById("activity-filter");
     const uf = sel && sel.value ? `&user_filter=${encodeURIComponent(sel.value)}` : "";
@@ -1156,17 +1173,17 @@ async function loadActivity() {
       sel.onchange = () => loadActivity();
     }
     if (!items.length) {
-      box.querySelector(".activity-list").innerHTML = `<div class="activity-empty">Sin actividad reciente en esta cuenta</div>`;
+      bar.querySelector(".activity-list").innerHTML = `<div class="activity-empty">Sin actividad reciente en esta cuenta</div>`;
       return;
     }
-    box.querySelector(".activity-list").innerHTML = items.map(a =>
+    bar.querySelector(".activity-list").innerHTML = items.map(a =>
       `<div class="activity-item">
         <span class="activity-user">${esc(a.user)}</span>
         <span class="activity-text">${esc(a.details)}</span>
         <span class="activity-time">${fmtDt(a.created_at)}</span>
       </div>`).join("");
   } catch (e) {
-    box.classList.add("hidden");
+    bar.classList.add("hidden");
   }
 }
 

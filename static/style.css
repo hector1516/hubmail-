@@ -391,17 +391,6 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 .detail-toolbar { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .detail-toolbar .spacer { flex: 1; }
 .detail-body { padding: 18px 22px; flex: 1; display: flex; flex-direction: column; }
-.activity-box {
-  border-top: 1px solid var(--border);
-  padding: 10px 14px;
-  background: rgba(248, 250, 253, .9);
-  font-size: 12px;
-  max-height: 180px;
-  overflow-y: auto;
-}
-.activity-box.hidden { display: none; }
-.activity-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 6px; }
-.activity-filter { width: 100%; margin-bottom: 6px; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); }
 .activity-item { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid #eef1f6; }
 .activity-item:last-child { border-bottom: none; }
 .activity-user { font-weight: 600; color: var(--primary); white-space: nowrap; }
@@ -417,10 +406,35 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
   border: none;
   border-top: 1px solid var(--border);
   margin-top: 14px;
-  flex: 1;
+  flex: none;
+  height: auto;
   min-height: 300px;
   background: #fff;
 }
+.activity-bar {
+  border-top: 1px solid var(--border);
+  background: rgba(248, 250, 253, .96);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-size: 12px;
+  max-height: 30vh;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  z-index: 10;
+}
+.activity-bar.hidden { display: none; }
+.activity-bar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.activity-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
+.activity-filter { flex: 1; min-width: 0; font-size: 12px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); }
+.activity-list { overflow-y: auto; padding: 4px 14px 10px; -webkit-overflow-scrolling: touch; }
 .attachments { margin-top: 16px; }
 .att-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .att-item {
