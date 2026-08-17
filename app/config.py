@@ -8,6 +8,10 @@ class Settings:
     db_user: str
     db_password: str
     db_name: str
+    users_db_server: str
+    users_db_user: str
+    users_db_password: str
+    users_db_name: str
     jwt_secret: str
     jwt_expire_minutes: int
     max_attachment_mb: int
@@ -21,10 +25,14 @@ class Settings:
 
 def get_settings() -> Settings:
     return Settings(
-        db_server=os.getenv("HUBMAIL_DB_SERVER", "172.26.117.220"),
-        db_user=os.getenv("HUBMAIL_DB_USER", "sa"),
+        db_server=os.getenv("HUBMAIL_DB_SERVER", "172.26.90.159"),
+        db_user=os.getenv("HUBMAIL_DB_USER", "hubmail"),
         db_password=os.getenv("HUBMAIL_DB_PASSWORD", "eyccazo"),
-        db_name=os.getenv("HUBMAIL_DB_NAME", "ECCSA_Admon_Pruebas"),
+        db_name=os.getenv("HUBMAIL_DB_NAME", "HUBMAIL"),
+        users_db_server=os.getenv("HUBMAIL_USERS_DB_SERVER", "172.26.117.220"),
+        users_db_user=os.getenv("HUBMAIL_USERS_DB_USER", "sa"),
+        users_db_password=os.getenv("HUBMAIL_USERS_DB_PASSWORD", "eyccazo"),
+        users_db_name=os.getenv("HUBMAIL_USERS_DB_NAME", "ECCSA_Admon_Pruebas"),
         jwt_secret=os.getenv("HUBMAIL_JWT_SECRET", "cambia-este-secreto-hubmail"),
         jwt_expire_minutes=int(os.getenv("HUBMAIL_JWT_EXPIRE", "480")),
         max_attachment_mb=int(os.getenv("HUBMAIL_MAX_ATTACH_MB", "25")),

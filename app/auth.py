@@ -4,7 +4,7 @@ import jwt
 from fastapi import Header, HTTPException
 
 from .config import settings
-from .db import get_conn
+from .db import get_users_conn
 
 
 def create_token(user_id: int, email: str, nombre: str) -> str:
@@ -20,7 +20,7 @@ def create_token(user_id: int, email: str, nombre: str) -> str:
 
 
 def authenticate(email: str, password: str):
-    conn = get_conn()
+    conn = get_users_conn()
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(

@@ -315,6 +315,22 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 .detail-toolbar { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .detail-toolbar .spacer { flex: 1; }
 .detail-body { padding: 18px 22px; flex: 1; display: flex; flex-direction: column; }
+.activity-box {
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  background: rgba(248, 250, 253, .9);
+  font-size: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.activity-box.hidden { display: none; }
+.activity-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 6px; }
+.activity-item { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid #eef1f6; }
+.activity-item:last-child { border-bottom: none; }
+.activity-user { font-weight: 600; color: var(--primary); white-space: nowrap; }
+.activity-text { color: var(--text); flex: 1; min-width: 0; }
+.activity-time { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.activity-empty { color: var(--muted); font-style: italic; }
 .detail-subject { font-size: 20px; font-weight: 700; margin-bottom: 10px; }
 .detail-meta { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 .detail-from { margin-bottom: 14px; }

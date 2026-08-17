@@ -14,7 +14,7 @@ def get_admin_user_id():
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT TOP 1 UserID FROM HUBMAIL_Admins")
+        cur.execute("SELECT UserID FROM HUBMAIL_Admins ORDER BY UserID LIMIT 1")
         row = cur.fetchone()
         return int(row[0]) if row else None
     finally:

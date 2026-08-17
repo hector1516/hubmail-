@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from .auth import authenticate, create_token, get_current_user
 from .config import settings
 from .crypto import encrypt_secret, decrypt_secret
-from .db import get_conn
+from .db import get_conn, get_users_conn
 from .filters import get_admin_user_id, is_admin
 from .imap_client import IMAPClient, IMAPError
 from .smtp_client import send_mail, SMTPError
@@ -110,9 +110,9 @@ def _backfill_user_settings():
                 if cur.fetchone()["N"]:
                     continue
                 cur.execute(
-                    "SELECT TOP 1 DisplayName, EmailAddress, Phone "
+                    "SELECT DisplayName, EmailAddress, Phone "
                     "FROM HUBMAIL_Accounts WHERE UserID=%s AND CanonicalAccountID IS NULL "
-                    "ORDER BY IsDefault DESC, AccountID",
+                    "ORDER BY IsDefault DESC, AccountID LIMIT 1",
                     (uid,),
                 )
                 a = cur.fetchone()
@@ -290,6 +290,10 @@ def login(payload: LoginPayload):
         raise HTTPException(401, "Usuario o contraseña incorrectos")
     token = create_token(row["Id"], row["Email"], row["Nombre"])
     last_login = _record_login(row["Id"])
+    _log_activity(
+        {"id": row["Id"], "name": row["Nombre"], "email": row["Email"]},
+        None, "login", f"Inició sesión",
+    )
     return {
         "token": token,
         "user": {"id": row["Id"], "email": row["Email"], "name": row["Nombre"]},
@@ -307,18 +311,36 @@ def _record_login(user_id: int):
         last_login = prev["LastLogin"] if prev else None
         if prev:
             cur.execute(
-                "UPDATE HUBMAIL_UserMeta SET LastLogin=GETDATE() WHERE UserID=%s",
+                "UPDATE HUBMAIL_UserMeta SET LastLogin=NOW() WHERE UserID=%s",
                 (user_id,),
             )
         else:
             cur.execute(
-                "INSERT INTO HUBMAIL_UserMeta (UserID, LastLogin) VALUES (%s, GETDATE())",
+                "INSERT INTO HUBMAIL_UserMeta (UserID, LastLogin) VALUES (%s, NOW())",
                 (user_id,),
             )
         conn.commit()
     finally:
         conn.close()
     return last_login
+
+
+def _log_activity(user, account_id, action, details):
+    if not user:
+        return
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO HUBMAIL_ActivityLog (AccountID, UserID, UserName, Action, Details) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (account_id, user["id"], user.get("name") or user.get("email") or "", action, details),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
 
 @app.get("/api/auth/me")
@@ -364,7 +386,7 @@ def welcome_summary(user=Depends(get_current_user)):
         folders.sort(key=lambda f: f["count"], reverse=True)
         total = sum(f["count"] for f in folders)
         cur.execute(
-            "SELECT TOP 8 m.UID, m.Folder, m.Subject, m.FromEmail, m.FromName, "
+            "SELECT m.UID, m.Folder, m.Subject, m.FromEmail, m.FromName, "
             "m.DateSent AS MsgDate, m.AccountID "
             "FROM HUBMAIL_Messages m "
             f"WHERE m.AccountID IN ({ph}) AND m.Seen=0 "
@@ -374,7 +396,8 @@ def welcome_summary(user=Depends(get_current_user)):
             "OR m.Folder LIKE '%%Papelera%%' OR m.Folder LIKE '%%Basura%%' "
             "OR m.Folder LIKE '%%Borrad%%' OR m.Folder LIKE 'Sent%%' "
             "OR m.Folder LIKE '%%Enviad%%' OR m.Folder LIKE 'Draft%%') "
-            "ORDER BY m.DateSent DESC",
+            "ORDER BY m.DateSent DESC "
+            "LIMIT 8",
             tuple(ids),
         )
         preview_rows = cur.fetchall()
@@ -454,8 +477,7 @@ def create_account(payload: AccountPayload, user=Depends(get_current_user)):
             ),
         )
         conn.commit()
-        cur.execute("SELECT @@IDENTITY AS Id")
-        account_id = cur.fetchone()["Id"]
+        account_id = cur.lastrowid
     finally:
         conn.close()
 
@@ -597,7 +619,7 @@ def delete_account(account_id: int, user=Depends(get_current_user)):
 def admin_users(user=Depends(get_current_user)):
     if not is_admin(user):
         raise HTTPException(403, "Solo el administrador")
-    conn = get_conn()
+    conn = get_users_conn()
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute("SELECT Id, Email, Nombre, Activo FROM HUB_Users ORDER BY Nombre, Email")
@@ -748,6 +770,41 @@ def account_unread(account_id: int, user=Depends(get_current_user)):
     }
 
 
+@app.get("/api/accounts/{account_id}/activity")
+def account_activity(
+    account_id: int,
+    user=Depends(get_current_user),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    acc = _canonical_row(_get_account(user, account_id))
+    cid = acc["AccountID"]
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT UserName, Action, Details, CreatedAt "
+            "FROM HUBMAIL_ActivityLog "
+            "WHERE AccountID=%s "
+            "ORDER BY CreatedAt DESC, LogID DESC",
+            (cid,),
+        )
+        rows = cur.fetchall()[:limit]
+    finally:
+        conn.close()
+    return {
+        "account_id": cid,
+        "items": [
+            {
+                "user": r["UserName"] or "",
+                "action": r["Action"],
+                "details": r["Details"] or "",
+                "created_at": r["CreatedAt"],
+            }
+            for r in rows
+        ],
+    }
+
+
 def _msg_row_to_dict(r):
     return {
         "id": str(r["UID"]),
@@ -847,8 +904,8 @@ def list_messages(
             f"""SELECT UID, FromName, FromEmail, ToText, Subject, DateSent, Seen, Flagged, HasAttachments
                 FROM HUBMAIL_Messages WHERE {where}
                 ORDER BY DateSent DESC
-                OFFSET %s ROWS FETCH NEXT %s ROWS ONLY""",
-            params + [(page - 1) * settings.page_size, settings.page_size],
+                LIMIT %s OFFSET %s""",
+            params + [settings.page_size, (page - 1) * settings.page_size],
         )
         rows = cur.fetchall()
     finally:
@@ -939,6 +996,8 @@ def message_action(
                 raise HTTPException(400, "Acción no válida")
     except IMAPError as e:
         raise HTTPException(400, str(e))
+    _log_activity(user, account_id, action,
+                  f"{'Marcó como leído' if action == 'read' else 'Marcó como no leído' if action == 'unread' else 'Marcó con bandera' if action == 'flag' else 'Quitó bandera' if action == 'unflag' else 'Marcó como no spam' if action == 'notspam' else 'Eliminó' if action == 'delete' else f'Movío a {dest}'} (carpeta {folder}, UID {uid})")
     return {"ok": True}
 
 
@@ -1018,6 +1077,8 @@ def move_messages(payload: MoveMessagesPayload, user=Depends(get_current_user)):
                     _db_move_message(src_id, payload.folder, int(uid), payload.dest_folder, int(new_uid) if new_uid else None)
         except IMAPError as e:
             raise HTTPException(400, str(e))
+        _log_activity(user, src_id, "move",
+                      f"Movío {len(payload.uids)} correo(s) de '{payload.folder}' a '{payload.dest_folder}' (misma cuenta)")
         return {"ok": True, "moved": len(payload.uids), "cross": False}
 
     moved = 0
@@ -1035,6 +1096,8 @@ def move_messages(payload: MoveMessagesPayload, user=Depends(get_current_user)):
                 moved += 1
     except IMAPError as e:
         raise HTTPException(400, f"No se pudo mover entre cuentas: {e}")
+    _log_activity(user, src_id, "move",
+                  f"Movío {moved} correo(s) de '{payload.folder}' a '{payload.dest_folder}' en la cuenta {dst['EmailAddress']} (entre cuentas)")
     return {"ok": True, "moved": moved, "cross": True}
 
 
@@ -1077,10 +1140,10 @@ def _db_cross_move_message(src_account_id, src_folder, uid, dst_account_id, dst_
             if atts:
                 cur.executemany(
                     "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,CONVERT(VARBINARY(MAX),%s,2))",
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                     [
                         (dst_account_id, dst_folder, new_uid, a["Name"], a["ContentType"], a["Cid"],
-                         a["Size"], a["Data"].hex())
+                         a["Size"], a["Data"])
                         for a in atts
                     ],
                 )
@@ -1109,6 +1172,8 @@ def bulk_delete(account_id: int, payload: BulkDeletePayload, user=Depends(get_cu
     except IMAPError as e:
         raise HTTPException(400, str(e))
     _db_delete_messages(account_id, payload.folder, payload.ids)
+    _log_activity(user, account_id, "bulk_delete",
+                  f"Eliminó {len(payload.ids)} correo(s) de '{payload.folder}'")
     return {"ok": True, "deleted": len(payload.ids)}
 
 
@@ -1125,6 +1190,8 @@ def bulk_set_seen(account_id: int, payload: BulkSeenPayload, user=Depends(get_cu
         raise HTTPException(400, str(e))
     for uid in payload.ids:
         _db_update_flags(account_id, payload.folder, int(uid), seen=payload.seen)
+    _log_activity(user, account_id, "bulk_seen",
+                  f"Marcó {len(payload.ids)} correo(s) como {'leído' if payload.seen else 'no leído'} en '{payload.folder}'")
     return {"ok": True, "updated": len(payload.ids), "seen": payload.seen}
 
 
@@ -1149,6 +1216,8 @@ def send_message(account_id: int, payload: SendPayload, user=Depends(get_current
         _upsert_sent_recipients(user, payload)
     except Exception:
         pass
+    _log_activity(user, acc["AccountID"], "send",
+                  f"Envió correo a {', '.join(payload.to) or '(sin destinatario)'}: {payload.subject or '(sin asunto)'}")
     return {"ok": True}
 
 
@@ -1180,7 +1249,7 @@ def _upsert_sent_recipients(user, payload):
 
 @app.get("/api/wallpaper")
 def wallpaper():
-    conn = get_conn()
+    conn = get_users_conn()
     try:
         cur = conn.cursor()
         cur.execute(
@@ -1232,12 +1301,12 @@ def notifications(user=Depends(get_current_user)):
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            """SELECT a.*, ISNULL(a.CanonicalAccountID, a.AccountID) AS EffAccountID,
+            """SELECT a.*, COALESCE(a.CanonicalAccountID, a.AccountID) AS EffAccountID,
                       (SELECT COUNT(*) FROM HUBMAIL_Messages m
-                       WHERE m.AccountID=ISNULL(a.CanonicalAccountID, a.AccountID)
+                       WHERE m.AccountID=COALESCE(a.CanonicalAccountID, a.AccountID)
                          AND m.Folder='INBOX' AND m.Seen=0) AS Unread,
                       (SELECT COUNT(*) FROM HUBMAIL_Messages m
-                       WHERE m.AccountID=ISNULL(a.CanonicalAccountID, a.AccountID)) AS Synced
+                       WHERE m.AccountID=COALESCE(a.CanonicalAccountID, a.AccountID)) AS Synced
                FROM HUBMAIL_Accounts a WHERE a.UserID=%s""",
             (user["id"],),
         )
@@ -1272,14 +1341,15 @@ def new_messages(user=Depends(get_current_user)):
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            """SELECT TOP 8 ua.EmailAddress, m.AccountID, m.UID, m.FromName, m.FromEmail,
+            """SELECT ua.EmailAddress, m.AccountID, m.UID, m.FromName, m.FromEmail,
                       m.Subject, m.DateSent, m.BodyText, m.BodyHtml
                FROM HUBMAIL_Accounts ua
-               JOIN HUBMAIL_Accounts c ON c.AccountID = ISNULL(ua.CanonicalAccountID, ua.AccountID)
+               JOIN HUBMAIL_Accounts c ON c.AccountID = COALESCE(ua.CanonicalAccountID, ua.AccountID)
                JOIN HUBMAIL_Messages m ON m.AccountID = c.AccountID
                   AND m.Folder = 'INBOX' AND m.Seen = 0
                WHERE ua.UserID = %s
-               ORDER BY m.DateSent DESC""",
+               ORDER BY m.DateSent DESC
+               LIMIT 8""",
             (user["id"],),
         )
         items = [
@@ -1369,10 +1439,15 @@ def create_filter(payload: FilterPayload, user=Depends(get_current_user)):
              payload.order_no),
         )
         conn.commit()
-        cur.execute("SELECT @@IDENTITY AS Id")
-        fid = cur.fetchone()[0]
+        fid = cur.lastrowid
     finally:
         conn.close()
+    _log_activity(
+        user,
+        payload.account_id if scope == "ACCOUNT" else None,
+        "rule_create",
+        f"Creó la regla '{payload.name}' (alcance {scope.lower()}, acción {payload.action})",
+    )
     return {"id": fid}
 
 
@@ -1407,6 +1482,12 @@ def update_filter(filter_id: int, payload: FilterPayload, user=Depends(get_curre
         conn.commit()
     finally:
         conn.close()
+    _log_activity(
+        user,
+        payload.account_id if scope == "ACCOUNT" else None,
+        "rule_update",
+        f"Actualizó la regla '{payload.name}' (alcance {scope.lower()})",
+    )
     return {"ok": True}
 
 
@@ -1414,14 +1495,27 @@ def update_filter(filter_id: int, payload: FilterPayload, user=Depends(get_curre
 def delete_filter(filter_id: int, user=Depends(get_current_user)):
     conn = get_conn()
     try:
-        cur = conn.cursor()
+        cur = conn.cursor(as_dict=True)
         cur.execute(
-            "DELETE FROM HUBMAIL_Filters WHERE FilterID=%s AND UserID=%s",
+            "SELECT Name, Scope, AccountID FROM HUBMAIL_Filters WHERE FilterID=%s AND UserID=%s",
             (filter_id, user["id"]),
         )
-        conn.commit()
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "DELETE FROM HUBMAIL_Filters WHERE FilterID=%s AND UserID=%s",
+                (filter_id, user["id"]),
+            )
+            conn.commit()
     finally:
         conn.close()
+    if row:
+        _log_activity(
+            user,
+            row["AccountID"],
+            "rule_delete",
+            f"Eliminó la regla '{row['Name']}' (alcance {row['Scope'].lower()})",
+        )
     return {"ok": True}
 
 
@@ -1509,11 +1603,17 @@ def delete_spam_list(list_id: int, user=Depends(get_current_user)):
 # ---------------------------------------------------------------- contactos
 @app.get("/api/contacts")
 def list_contacts(user=Depends(get_current_user)):
-    conn = get_conn()
+    conn = get_users_conn()
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute("SELECT Nombre, Email FROM HUB_Users WHERE Activo=1 ORDER BY Nombre")
         users = [{"name": r["Nombre"], "email": r["Email"]} for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
         cur.execute(
             "SELECT ContactID, Name, Email, Phone, Notes FROM HUBMAIL_Contacts ORDER BY Name"
         )
@@ -1554,8 +1654,7 @@ def create_contact(payload: ContactPayload, user=Depends(get_current_user)):
             (payload.name, payload.email, payload.phone, payload.notes, user["id"]),
         )
         conn.commit()
-        cur.execute("SELECT @@IDENTITY AS Id")
-        cid = cur.fetchone()["Id"]
+        cid = cur.lastrowid
     finally:
         conn.close()
     return {"id": cid}
@@ -1654,7 +1753,7 @@ def collect_addresses(user):
         cur.execute(
             "SELECT DISTINCT FromEmail, FromName FROM HUBMAIL_Messages "
             "WHERE AccountID IN (%s) AND FromEmail IS NOT NULL AND FromEmail<>'' "
-            "AND DateSent >= DATEADD(day,-60,GETDATE())" % ph,
+            "AND DateSent >= DATE_SUB(NOW(), INTERVAL 60 DAY)" % ph,
             list(ids),
         )
         for r in cur.fetchall():
@@ -1665,7 +1764,7 @@ def collect_addresses(user):
         cur.execute(
             "SELECT ToText FROM HUBMAIL_Messages WHERE AccountID IN (%s) "
             "AND ToText IS NOT NULL AND ToText<>'' "
-            "AND DateSent >= DATEADD(day,-60,GETDATE())" % ph,
+            "AND DateSent >= DATE_SUB(NOW(), INTERVAL 60 DAY)" % ph,
             list(ids),
         )
         for r in cur.fetchall():
@@ -1736,13 +1835,6 @@ def autocomplete_contacts(q: str = Query(default=""), user=Depends(get_current_u
         for r in cur.fetchall():
             add(r["Name"], r["Email"])
         cur.execute(
-            "SELECT Nombre, Email FROM HUB_Users WHERE Activo=1 "
-            "AND (LOWER(Email) LIKE %s OR LOWER(Nombre) LIKE %s) ORDER BY Nombre",
-            (like, like),
-        )
-        for r in cur.fetchall():
-            add(r["Nombre"], r["Email"])
-        cur.execute(
             "SELECT Name, Email FROM HUBMAIL_Contacts "
             "WHERE (LOWER(Email) LIKE %s OR LOWER(Name) LIKE %s) ORDER BY Name",
             (like, like),
@@ -1751,6 +1843,19 @@ def autocomplete_contacts(q: str = Query(default=""), user=Depends(get_current_u
             add(r["Name"], r["Email"])
     finally:
         conn.close()
+
+    conn2 = get_users_conn()
+    try:
+        cur2 = conn2.cursor(as_dict=True)
+        cur2.execute(
+            "SELECT Nombre, Email FROM HUB_Users WHERE Activo=1 "
+            "AND (LOWER(Email) LIKE %s OR LOWER(Nombre) LIKE %s) ORDER BY Nombre",
+            (like, like),
+        )
+        for r in cur2.fetchall():
+            add(r["Nombre"], r["Email"])
+    finally:
+        conn2.close()
     return {"items": items[:20]}
 
 

@@ -47,20 +47,6 @@ def _mark_connected(account_id):
 
 
 def _safe(value):
-    if value is None:
-        return None
-    try:
-        value.encode("cp1252")
-        return value
-    except UnicodeEncodeError:
-        return value.encode("cp1252", "ignore").decode("cp1252")
-
-
-def _data_hex(value):
-    if value is None:
-        return None
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return bytes(value).hex()
     return value
 
 
@@ -234,13 +220,13 @@ def _update_sync_state(account_id, folder):
         )
         if cur.fetchone()["N"]:
             cur.execute(
-                "UPDATE HUBMAIL_SyncState SET LastSync=GETDATE(), TotalCount=%s "
+                "UPDATE HUBMAIL_SyncState SET LastSync=NOW(), TotalCount=%s "
                 "WHERE AccountID=%s AND Folder=%s",
                 (total, account_id, folder),
             )
         else:
             cur.execute(
-                "INSERT INTO HUBMAIL_SyncState (AccountID, Folder, LastSync, TotalCount) VALUES (%s,%s,GETDATE(),%s)",
+                "INSERT INTO HUBMAIL_SyncState (AccountID, Folder, LastSync, TotalCount) VALUES (%s,%s,NOW(),%s)",
                 (account_id, folder, total),
             )
         conn.commit()
@@ -273,10 +259,10 @@ def _replace_attachments(account_id, folder, uid, items):
         )
         cur.executemany(
             "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,CONVERT(VARBINARY(MAX),%s,2))",
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
             [
                 (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]), _safe(a["cid"]),
-                 a["size"], _data_hex(a["data"]))
+                 a["size"], a["data"])
                 for a in items
             ],
         )
@@ -314,7 +300,7 @@ def _upsert_message(account_id, folder, uid, flags, raw):
                        ToText=%s, CcText=%s, Subject=%s, DateSent=%s,
                        Seen=%s, Answered=%s, Flagged=%s, Draft=%s,
                        HasAttachments=%s, BodyHtml=%s, BodyText=%s, Size=%s,
-                       SyncedAt=GETDATE()
+SyncedAt=NOW()
                    WHERE AccountID=%s AND Folder=%s AND UID=%s""",
                 base + [account_id, folder, uid],
             )
@@ -365,7 +351,7 @@ def _insert_many(account_id, folder, items):
             for a in p["attachment_items"]:
                 att_rows.append(
                     (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]),
-                     _safe(a["cid"]), a["size"], _data_hex(a["data"]))
+                     _safe(a["cid"]), a["size"], a["data"])
                 )
         if not data:
             return 0
@@ -394,7 +380,7 @@ def _insert_many(account_id, folder, items):
             try:
                 cur.executemany(
                     "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,CONVERT(VARBINARY(MAX),%s,2))",
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                     att_rows,
                 )
                 conn.commit()
@@ -406,7 +392,7 @@ def _insert_many(account_id, folder, items):
                     try:
                         cur.execute(
                             "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                            "VALUES (%s,%s,%s,%s,%s,%s,%s,CONVERT(VARBINARY(MAX),%s,2))",
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                             row,
                         )
                     except Exception as e2:
@@ -447,7 +433,7 @@ def _update_body_many(account_id, folder, items):
             for a in p["attachment_items"]:
                 att_rows.append(
                     (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]),
-                     _safe(a["cid"]), a["size"], _data_hex(a["data"]))
+                     _safe(a["cid"]), a["size"], a["data"])
                 )
         if not data:
             return 0
@@ -456,7 +442,7 @@ def _update_body_many(account_id, folder, items):
                ToText=%s, CcText=%s, Subject=%s, DateSent=%s,
                Seen=%s, Answered=%s, Flagged=%s, Draft=%s,
                HasAttachments=%s, BodyHtml=%s, BodyText=%s, Size=%s,
-               SyncedAt=GETDATE()
+               SyncedAt=NOW()
                WHERE AccountID=%s AND Folder=%s AND UID=%s"""
         ok = 0
         try:
@@ -658,9 +644,9 @@ def _run_retention(account_id, imap):
 def _upsert_retention(cur, account_id):
     cur.execute("SELECT 1 FROM HUBMAIL_Retention WHERE AccountID=%s", (account_id,))
     if cur.fetchone():
-        cur.execute("UPDATE HUBMAIL_Retention SET LastRun=GETDATE() WHERE AccountID=%s", (account_id,))
+        cur.execute("UPDATE HUBMAIL_Retention SET LastRun=NOW() WHERE AccountID=%s", (account_id,))
     else:
-        cur.execute("INSERT INTO HUBMAIL_Retention (AccountID, LastRun) VALUES (%s, GETDATE())", (account_id,))
+        cur.execute("INSERT INTO HUBMAIL_Retention (AccountID, LastRun) VALUES (%s, NOW())", (account_id,))
 
 
 def _save_folders(account_id, delimiter, folders):

@@ -739,6 +739,7 @@ async function doMoveDrop(destAccId, destFolder) {
     toast(uids.length === 1 ? "Mensaje movido" : `${uids.length} mensajes movidos`, "ok");
     await loadMessages();
     await loadUnreadCounts();
+    loadActivity();
     renderSidebar();
     renderContent();
   } catch (e) {
@@ -836,6 +837,7 @@ function renderContent() {
       await loadMessages();
       renderContent();
       toast(`${n} mensaje(s) eliminado(s)`, "ok");
+      loadActivity();
     } catch (e) {
       toast(e.message, "error");
     } finally {
@@ -855,6 +857,7 @@ function renderContent() {
       await loadMessages();
       renderContent();
       toast(seen ? `${n} mensaje(s) leídos` : `${n} mensaje(s) marcados como no leídos`, "ok");
+      loadActivity();
     } catch (e) {
       toast(e.message, "error");
     } finally {
@@ -969,6 +972,10 @@ function detailHtml(m) {
       <div class="detail-meta">Fecha: ${esc(m.date)}</div>
       ${atts}
       <iframe class="body-frame" sandbox="" referrerpolicy="no-referrer" srcdoc="${esc(bodyHtml || "")}"></iframe>
+    </div>
+    <div class="activity-box hidden" id="activity-box">
+      <div class="activity-title">📋 Actividad de la cuenta</div>
+      <div class="activity-list">Cargando…</div>
     </div>`;
 }
 
@@ -977,6 +984,29 @@ function renderDetail(m) {
   dp.innerHTML = detailHtml(m);
   dp.classList.add("open");
   bindDetailActions(m);
+  loadActivity();
+}
+
+async function loadActivity() {
+  const box = document.getElementById("activity-box");
+  if (!box) return;
+  box.classList.remove("hidden");
+  try {
+    const d = await api(`/accounts/${state.currentAccountId}/activity?limit=15`);
+    const items = d.items || [];
+    if (!items.length) {
+      box.querySelector(".activity-list").innerHTML = `<div class="activity-empty">Sin actividad reciente en esta cuenta</div>`;
+      return;
+    }
+    box.querySelector(".activity-list").innerHTML = items.map(a =>
+      `<div class="activity-item">
+        <span class="activity-user">${esc(a.user)}</span>
+        <span class="activity-text">${esc(a.details)}</span>
+        <span class="activity-time">${fmtDt(a.created_at)}</span>
+      </div>`).join("");
+  } catch (e) {
+    box.classList.add("hidden");
+  }
 }
 
 function bindDetailActions(m) {
@@ -998,11 +1028,13 @@ function bindDetailActions(m) {
     renderContent();
     if (isModal) closeModal();
     toast("Mensaje eliminado", "ok");
+    loadActivity();
   };
   document.getElementById("d-flag").onclick = async () => {
     await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=${m.flagged ? "unflag" : "flag"}`, { method: "PATCH" }).catch(() => {});
     m.flagged = !m.flagged;
     document.getElementById("d-flag").textContent = m.flagged ? "★" : "☆";
+    loadActivity();
   };
   document.getElementById("d-unread").onclick = async () => {
     await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=unread`, { method: "PATCH" }).catch(() => {});
@@ -1011,6 +1043,7 @@ function bindDetailActions(m) {
     const el = document.querySelector(`#message-list .msg-item[data-id="${esc(m.id)}"]`);
     if (el) el.classList.add("unread");
     toast("Marcado como no leído", "ok");
+    loadActivity();
   };
   document.getElementById("d-reply").onclick = () => {
     const f = m.from[0];
@@ -1026,6 +1059,7 @@ function bindDetailActions(m) {
     m.spam = false;
     document.getElementById("d-notspam").style.display = "none";
     toast("Marcado como no spam", "ok");
+    loadActivity();
   };
 }
 
@@ -1256,6 +1290,7 @@ async function sendMessage() {
     });
     closeModal();
     toast("Correo enviado", "ok");
+    loadActivity();
   } catch (e) {
     toast(e.message, "error");
     btn.disabled = false;
