@@ -214,6 +214,19 @@ header {
 .btn-sm { padding: 4px 9px; font-size: 12px; }
 
 .body { display: flex; flex: 1; overflow: hidden; }
+.gutter {
+  flex-shrink: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+}
+.gutter:hover, body.resizing .gutter { background: rgba(14, 122, 196, .18); }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing * { cursor: col-resize !important; }
+#gutter-side { margin-left: -3px; border-right: 1px solid var(--border); }
+#gutter-list { margin-left: -3px; border-right: 1px solid var(--border); }
 
 /* ---------- sidebar ---------- */
 aside {
@@ -425,6 +438,13 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 .sel-all { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .sel-all input { width: 15px; height: 15px; cursor: pointer; }
 
+.acc-color-section { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.acc-color-title { font-size: 12px; font-weight: 700; color: var(--primary); margin-bottom: 8px; }
+.acc-color-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; }
+.acc-color-row b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-color-input { width: 42px; height: 30px; border: 1px solid var(--border); border-radius: 6px; padding: 2px; cursor: pointer; background: #fff; }
+.acc-color-hint { font-size: 11px; color: var(--muted); margin-top: 6px; font-style: italic; }
+
 /* ---------- modals ---------- */
 .modal-backdrop {
   position: fixed;
@@ -616,6 +636,7 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
   aside.open { transform: translateX(0); }
   #btn-menu { display: inline-block; }
   main { flex-direction: column; }
+  .gutter { display: none; }
   #list-pane { width: 100%; min-width: 0; }
   #detail-pane { position: fixed; inset: var(--header-h) 0 0 0; z-index: 15; background: rgba(255, 255, 255, .93); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: none; overflow-y: auto; }
   #detail-pane.open { display: flex; }

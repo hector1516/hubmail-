@@ -532,6 +532,40 @@ def update_settings(payload: SettingsPayload, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+@app.get("/api/settings/colors")
+def get_account_colors(user=Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT AccountID, Color FROM HUBMAIL_AccountColors WHERE UserID=%s",
+            (user["id"],),
+        )
+        return {"colors": {r[0]: r[1] for r in cur.fetchall()}}
+    finally:
+        conn.close()
+
+
+@app.put("/api/settings/colors")
+def set_account_colors(payload: dict, user=Depends(get_current_user)):
+    colors = payload.get("colors") or {}
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM HUBMAIL_AccountColors WHERE UserID=%s", (user["id"],))
+        for account_id, color in colors.items():
+            if not color:
+                continue
+            cur.execute(
+                "INSERT INTO HUBMAIL_AccountColors (UserID, AccountID, Color) VALUES (%s,%s,%s)",
+                (user["id"], int(account_id), color),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
 @app.put("/api/accounts/{account_id}")
 def update_account(account_id: int, payload: AccountPayload, user=Depends(get_current_user)):
     if not is_admin(user):

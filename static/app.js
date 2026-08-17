@@ -23,6 +23,8 @@ const state = {
   signature_html: "",
   unreadByAccount: {},
   collapsedAccounts: new Set(),
+  userColors: {},
+  paneWidths: { sidebar: 270, list: 380 },
 };
 
 let dragData = null;
@@ -33,9 +35,59 @@ const ACC_FALLBACK_COLORS = [
 ];
 
 function accColor(acc) {
+  if (acc && state.userColors && state.userColors[acc.id]) return state.userColors[acc.id];
   if (acc && acc.color) return acc.color;
   const id = acc ? acc.id : 0;
   return ACC_FALLBACK_COLORS[Math.abs(id) % ACC_FALLBACK_COLORS.length];
+}
+
+async function loadPrefs() {
+  const key = state.user ? `hubmail_panes_${state.user.id}` : null;
+  if (key) {
+    try {
+      const p = JSON.parse(localStorage.getItem(key) || "{}");
+      state.paneWidths = { sidebar: p.sidebar || 270, list: p.list || 380 };
+    } catch (e) {}
+  }
+  try {
+    const d = await api("/settings/colors");
+    state.userColors = d.colors || {};
+  } catch (e) {}
+}
+
+function savePaneWidths() {
+  const key = state.user ? `hubmail_panes_${state.user.id}` : null;
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(state.paneWidths));
+  } catch (e) {}
+}
+
+function initGutter(gutterId, targetId, which) {
+  const gutter = document.getElementById(gutterId);
+  if (!gutter) return;
+  gutter.addEventListener("mousedown", e => {
+    e.preventDefault();
+    document.body.classList.add("resizing");
+    const startX = e.clientX;
+    const startW = document.getElementById(targetId).offsetWidth;
+    const onMove = ev => {
+      const dx = ev.clientX - startX;
+      let w = startW + dx;
+      if (which === "sidebar") w = Math.max(190, Math.min(420, w));
+      else w = Math.max(280, Math.min(720, w));
+      document.getElementById(targetId).style.width = w + "px";
+      state.paneWidths[which] = w;
+    };
+    const onUp = () => {
+      document.body.classList.remove("resizing");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      savePaneWidths();
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
 }
 
 const app = document.getElementById("app");
@@ -203,8 +255,8 @@ function renderLogin() {
     try {
       const data = await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
       state.token = data.token;
-      state.user = data.user;
       localStorage.setItem("hubmail_token", data.token);
+      state.user = await api("/auth/me");
       await boot();
     } catch (e) {
       toast(e.message, "error");
@@ -335,6 +387,7 @@ function showWelcome(d) {
 /* ============================================================ shell */
 async function boot() {
   try {
+    await loadPrefs();
     await loadAccounts();
     api("/contacts/collect", { method: "POST" }).catch(() => {});
     try {
@@ -592,7 +645,8 @@ function renderShell() {
         </div>
       </header>
       <div class="body">
-        <aside id="sidebar"></aside>
+        <aside id="sidebar" style="width:${state.paneWidths.sidebar}px"></aside>
+        <div class="gutter" id="gutter-side" title="Arrastrar para ajustar"></div>
         <main id="content"></main>
       </div>
     </div>`;
@@ -609,7 +663,7 @@ function renderShell() {
     state.page = 1;
     loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
   };
-
+  initGutter("gutter-side", "sidebar", "sidebar");
   renderSidebar();
   renderContent();
   if (window.innerWidth <= 820) document.getElementById("sidebar").classList.add("open");
@@ -837,7 +891,7 @@ function renderContent() {
   const msgs = messagesHtml();
 
   content.innerHTML = `
-    <div id="list-pane">
+    <div id="list-pane" style="width:${state.paneWidths.list}px">
       <div class="list-toolbar">
         <div class="folder-title">${esc(state.currentFolder)} ${state.unreadOnly ? "(no leídos)" : ""}</div>
         <div class="last-update">${state.lastSync ? "Actualizado " + esc(state.lastSync) : "Sin sincronizar"}</div>
@@ -860,8 +914,10 @@ function renderContent() {
         <button class="btn-ghost btn btn-sm" id="btn-next" ${state.page >= pages ? "disabled" : ""}>Siguiente →</button>
       </div>
     </div>
+    <div class="gutter" id="gutter-list" title="Arrastrar para ajustar"></div>
     <div id="detail-pane"></div>`;
 
+  initGutter("gutter-list", "list-pane", "list");
   const searchBox = document.getElementById("search-box");
   let timer;
   searchBox.oninput = () => {
@@ -1522,22 +1578,51 @@ function openContactForm(c, pickMode) {
 function openAccountsModal() {
   const isAdmin = state.user && state.user.is_admin;
   if (isAdmin) return openAdminAccounts();
+  const multi = state.accounts.length > 1;
   const rows = state.accounts.map(a => `
     <div class="contact-item">
       <div><span class="acc-dot" style="background:${accColor(a)}"></span><b>${esc(a.email)}</b><div class="c-email">${esc(a.display_name || "")} · ${a.is_default ? "predeterminada" : ""}</div></div>
     </div>`).join("");
+  const colorSection = multi ? `
+    <div class="acc-color-section">
+      <div class="acc-color-title">🎨 Colores de mis cuentas</div>
+      ${state.accounts.map(a => `
+        <div class="acc-color-row">
+          <span class="acc-dot" style="background:${accColor(a)}"></span>
+          <b>${esc(a.email)}</b>
+          <input type="color" class="acc-color-input" data-accid="${a.id}" value="${accColor(a)}" title="Cambiar color">
+        </div>`).join("")}
+    </div>
+    <div class="acc-color-hint">El color se guarda solo para tu usuario. Se aplica en la barra lateral, la lista y los filtros.</div>` : "";
   openModal(`
     <h2>Mis cuentas</h2>
     <div>${rows || `<div class="empty">Sin cuentas asignadas</div>`}</div>
+    ${colorSection}
     <div class="admin-hint">Para agregar o modificar cuentas, contacta al administrador.</div>
     <div class="actions">
       <button class="btn-ghost btn" id="acc-close">Cerrar</button>
       <button class="btn-ghost btn" id="acc-sig">✍️ Firma personal</button>
       <button class="btn-ghost btn" id="acc-filt">📁 Filtros</button>
+      ${multi ? `<button class="btn-primary btn" id="acc-colors-save">Guardar colores</button>` : ""}
     </div>`);
   document.getElementById("acc-close").onclick = closeModal;
   document.getElementById("acc-sig").onclick = openSignatureForm;
   document.getElementById("acc-filt").onclick = openFiltersManager;
+  if (multi) {
+    document.getElementById("acc-colors-save").onclick = async () => {
+      const colors = {};
+      document.querySelectorAll(".acc-color-input").forEach(inp => {
+        colors[inp.dataset.accid] = inp.value;
+      });
+      try {
+        await api("/settings/colors", { method: "PUT", body: JSON.stringify({ colors }) });
+        state.userColors = colors;
+        renderSidebar();
+        renderContent();
+        toast("Colores guardados", "ok");
+      } catch (e) { toast(e.message, "error"); }
+    };
+  }
 }
 
 async function openAdminAccounts() {

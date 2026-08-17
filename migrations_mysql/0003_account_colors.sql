@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS HUBMAIL_AccountColors (
+    UserID INT NOT NULL,
+    AccountID INT NOT NULL,
+    Color VARCHAR(20) NOT NULL,
+    PRIMARY KEY (UserID, AccountID)
+);
