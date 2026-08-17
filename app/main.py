@@ -816,6 +816,64 @@ def account_activity(
     }
 
 
+@app.get("/api/admin/activity")
+def admin_activity(
+    user=Depends(get_current_user),
+    account_id: int | None = Query(default=None),
+    user_filter: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT AccountID, EmailAddress FROM HUBMAIL_Accounts "
+            "WHERE CanonicalAccountID IS NULL ORDER BY EmailAddress"
+        )
+        accounts = [{"id": r["AccountID"], "email": r["EmailAddress"]} for r in cur.fetchall()]
+        if account_id is not None:
+            cur.execute(
+                "SELECT DISTINCT UserName FROM HUBMAIL_ActivityLog "
+                "WHERE AccountID=%s AND UserName IS NOT NULL AND UserName<>''",
+                (account_id,),
+            )
+        else:
+            cur.execute(
+                "SELECT DISTINCT UserName FROM HUBMAIL_ActivityLog "
+                "WHERE UserName IS NOT NULL AND UserName<>''"
+            )
+        users = sorted(r["UserName"] for r in cur.fetchall())
+        sql = "SELECT AccountID, UserName, Action, Details, CreatedAt FROM HUBMAIL_ActivityLog WHERE 1=1 "
+        params = []
+        if account_id is not None:
+            sql += "AND AccountID=%s "
+            params.append(account_id)
+        if user_filter:
+            sql += "AND UserName=%s "
+            params.append(user_filter)
+        sql += "ORDER BY CreatedAt DESC, LogID DESC"
+        cur.execute(sql, tuple(params))
+        rows = cur.fetchall()[:limit]
+    finally:
+        conn.close()
+    return {
+        "accounts": accounts,
+        "users": users,
+        "items": [
+            {
+                "account_id": r["AccountID"],
+                "user": r["UserName"] or "",
+                "action": r["Action"],
+                "details": r["Details"] or "",
+                "created_at": r["CreatedAt"],
+            }
+            for r in rows
+        ],
+    }
+
+
 def _msg_row_to_dict(r):
     return {
         "id": str(r["UID"]),

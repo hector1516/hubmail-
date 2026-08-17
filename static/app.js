@@ -96,15 +96,78 @@ function closeModal() {
   modalRoot.innerHTML = "";
 }
 
+async function openAdminActivity() {
+  try {
+    const data = await api("/api/admin/activity");
+    renderActivityModal(data, {});
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+function renderActivityModal(data, sel) {
+  const accSel = `<option value="">Todas las cuentas</option>` +
+    (data.accounts || []).map(a =>
+      `<option value="${a.id}" ${sel.account_id == a.id ? "selected" : ""}>${esc(a.email)}</option>`).join("");
+  const userSel = `<option value="">Todos los usuarios</option>` +
+    (data.users || []).map(u =>
+      `<option value="${esc(u)}" ${sel.user_filter === u ? "selected" : ""}>${esc(u)}</option>`).join("");
+  const items = (data.items || []).map(it => `
+    <tr>
+      <td>${esc(it.account_id)}</td>
+      <td>${esc(it.user)}</td>
+      <td class="act-action">${esc(it.action)}</td>
+      <td>${esc(it.details)}</td>
+      <td class="act-date">${fmtDt(it.created_at)}</td>
+    </tr>`).join("") || '<tr><td colspan="5" class="act-empty">Sin actividad registrada</td></tr>';
+  openModal(`
+    <div class="act-head">
+      <h3>📋 Log de actividad de cuentas</h3>
+      <button class="icon-btn btn-sm" onclick="closeModal()">✕</button>
+    </div>
+    <div class="act-filters">
+      <select id="act-account" class="field-select">${accSel}</select>
+      <select id="act-user" class="field-select">${userSel}</select>
+      <button class="btn btn-ghost btn-sm" id="act-refresh">Refrescar</button>
+    </div>
+    <div class="act-table-wrap">
+      <table class="act-table">
+        <thead><tr><th>#</th><th>Usuario</th><th>Acción</th><th>Detalle</th><th>Fecha</th></tr></thead>
+        <tbody>${items}</tbody>
+      </table>
+    </div>`, "modal-lg");
+  document.getElementById("act-refresh").onclick = async () => {
+    const accountId = document.getElementById("act-account").value;
+    const userFilter = document.getElementById("act-user").value;
+    const qs = new URLSearchParams();
+    if (accountId) qs.set("account_id", accountId);
+    if (userFilter) qs.set("user_filter", userFilter);
+    try {
+      const data = await api(`/api/admin/activity?${qs.toString()}`);
+      renderActivityModal(data, { account_id: accountId, user_filter: userFilter });
+    } catch (e) {
+      toast(e.message, "error");
+    }
+  };
+  document.getElementById("act-account").onchange = () => document.getElementById("act-refresh").click();
+  document.getElementById("act-user").onchange = () => document.getElementById("act-refresh").click();
+}
+
 async function applyWallpaper() {
   try {
     const res = await fetch("/api/wallpaper");
     const data = await res.json();
     if (data.url) {
-      document.body.style.backgroundImage = `url("${data.url}")`;
+      const wall = `url("${data.url}")`;
+      document.body.style.backgroundImage = wall;
       document.body.style.backgroundSize = "cover";
       document.body.style.backgroundPosition = "center";
       document.body.style.backgroundAttachment = window.innerWidth > 820 ? "fixed" : "scroll";
+      const wrap = document.querySelector(".login-wrap");
+      if (wrap) {
+        wrap.style.setProperty("--wallpaper", wall);
+        wrap.setAttribute("data-bg", "1");
+      }
     }
   } catch (e) {}
 }
@@ -113,14 +176,25 @@ async function applyWallpaper() {
 function renderLogin() {
   app.innerHTML = `
     <div class="login-wrap">
+      <div class="login-bg"></div>
+      <div class="login-overlay"></div>
       <div class="login-card">
-        <h1>HUBMail</h1>
-        <div class="sub">Correo corporativo ECCSA</div>
+        <div class="login-logo">
+          <img src="/engrane.png" alt="ECCSA" class="login-logo-img">
+          <div class="login-logo-text">
+            <div class="login-brand">ECCSA</div>
+            <div class="login-brand-sub">Correo corporativo</div>
+          </div>
+        </div>
+        <h1>Bienvenido</h1>
+        <div class="sub">Inicia sesión en tu correo</div>
         <div class="field"><label>Correo</label><input id="lg-email" type="email" placeholder="usuario@ecc-sa.com.mx" autocomplete="username"></div>
         <div class="field"><label>Contraseña</label><input id="lg-pass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
         <button class="btn btn-primary" id="lg-btn" style="width:100%;padding:11px">Iniciar sesión</button>
+        <div class="login-foot">HUBMail · Electronorte de Culiacán</div>
       </div>
     </div>`;
+  applyWallpaper();
   const doLogin = async () => {
     const email = document.getElementById("lg-email").value.trim();
     const password = document.getElementById("lg-pass").value;
@@ -510,6 +584,7 @@ function renderShell() {
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
         <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail<span class="top-user" id="btn-welcome" title="Ver mi resumen">${esc(state.user?.name || state.user?.email || "")}</span></div>
         <div class="header-right">
+          ${state.user && state.user.is_admin ? '<button class="icon-btn" id="btn-activity" title="Log de actividad">📋</button>' : ""}
           <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
           <button class="icon-btn btn-primary" id="btn-compose">✉️ <span class="btn-label">Redactar</span></button>
           <button class="icon-btn" id="btn-accounts" title="Cuentas y firma">⚙️</button>
@@ -526,6 +601,8 @@ function renderShell() {
   document.getElementById("btn-compose").onclick = () => openCompose();
   document.getElementById("btn-accounts").onclick = () => openAccountsModal();
   document.getElementById("btn-logout").onclick = logout;
+  const btnActivity = document.getElementById("btn-activity");
+  if (btnActivity) btnActivity.onclick = () => openAdminActivity();
   document.getElementById("btn-welcome").onclick = () => openWelcome();
   document.getElementById("btn-notif").onclick = () => {
     state.unreadOnly = !state.unreadOnly;
