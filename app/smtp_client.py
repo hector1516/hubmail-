@@ -68,3 +68,4 @@ def send_mail(account, to, cc, bcc, subject, body_html, attachments, reply_to=No
         raise
     except Exception as e:
         raise SMTPError(f"Error al enviar por SMTP: {e}")
+    return outer.as_bytes()

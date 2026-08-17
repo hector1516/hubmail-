@@ -1139,7 +1139,7 @@ def bulk_set_seen(account_id: int, payload: BulkSeenPayload, user=Depends(get_cu
 def send_message(account_id: int, payload: SendPayload, user=Depends(get_current_user)):
     acc = _canonical_row(_get_account(user, account_id))
     try:
-        send_mail(
+        raw = send_mail(
             acc,
             payload.to,
             payload.cc,
@@ -1156,9 +1156,21 @@ def send_message(account_id: int, payload: SendPayload, user=Depends(get_current
         _upsert_sent_recipients(user, payload)
     except Exception:
         pass
+    try:
+        msgid = ""
+        try:
+            import email as _email
+            parsed = _email.message_from_bytes(raw)
+            msgid = parsed.get("Message-ID") or ""
+        except Exception:
+            pass
+        syncmod._enqueue_op(acc["AccountID"], "append", "Sent", 0,
+                            dest_folder="", msgid=msgid, raw_message=raw)
+    except Exception:
+        pass
     _log_activity(user, acc["AccountID"], "send",
                   f"Envió correo a {', '.join(payload.to) or '(sin destinatario)'}: {payload.subject or '(sin asunto)'}")
-    return {"ok": True}
+    return {"ok": True, "queued_sent": True}
 
 
 def _upsert_sent_recipients(user, payload):

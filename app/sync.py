@@ -666,14 +666,14 @@ def _save_folders(account_id, delimiter, folders):
         conn.close()
 
 
-def _enqueue_op(account_id, op_type, folder, uid, value=None, dest_folder=None, dest_account_id=None, msgid=None):
+def _enqueue_op(account_id, op_type, folder, uid, value=None, dest_folder=None, dest_account_id=None, msgid=None, raw_message=None):
     conn = get_conn()
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO HUBMAIL_PendingOps (AccountID, OpType, Folder, UID, Value, DestFolder, DestAccountID, MsgId) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-            (account_id, op_type, folder, int(uid), value, dest_folder, dest_account_id, msgid),
+            "INSERT INTO HUBMAIL_PendingOps (AccountID, OpType, Folder, UID, Value, DestFolder, DestAccountID, MsgId, RawMessage) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (account_id, op_type, folder, int(uid), value, dest_folder, dest_account_id, msgid, raw_message),
         )
         conn.commit()
     finally:
@@ -871,6 +871,44 @@ def _apply_cross_move(src_account_id, op, simap):
     _db_cross_move_message(src_account_id, op["Folder"], op["UID"], op["DestAccountID"], op["DestFolder"], int(new_uid), seen)
 
 
+def _sent_folder(account_id, folders):
+    named = [f for f in folders if f["name"].lower() in ("sent", "sent items", "enviados", "enviado")]
+    if named:
+        return named[0]["name"]
+    for f in folders:
+        if "\\Sent" in (f.get("flags") or []):
+            return f["name"]
+    for f in folders:
+        low = f["name"].lower()
+        if "sent" in low or "enviad" in low:
+            return f["name"]
+    return "Sent"
+
+
+def _apply_append_op(account_id, op, imap):
+    raw = op.get("RawMessage")
+    if not raw:
+        raise IMAPError("Mensaje sin contenido para guardar en Enviados")
+    lf = imap.list_folders()
+    dest = op.get("DestFolder") or _sent_folder(account_id, lf["folders"])
+    new_uid = imap.append_message(dest, raw, ["\\Seen"])
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT 1 FROM HUBMAIL_Folders WHERE AccountID=%s AND Folder=%s",
+            (account_id, dest),
+        )
+        if not cur.fetchone():
+            cur.execute(
+                "INSERT INTO HUBMAIL_Folders (AccountID, Folder, Delimiter, Flags) VALUES (%s,%s,%s,%s)",
+                (account_id, dest, lf["delimiter"], "\\Sent"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _apply_pending_ops(account_id, imap):
     conn = get_conn()
     try:
@@ -902,6 +940,8 @@ def _apply_pending_ops(account_id, imap):
                     _db_move_message(account_id, op["Folder"], op["UID"], op["DestFolder"], int(new_uid))
             elif op["OpType"] == "cross_move":
                 _apply_cross_move(account_id, op, imap)
+            elif op["OpType"] == "append":
+                _apply_append_op(account_id, op, imap)
             _set_op_status(op["OpID"], "done")
         except Exception as e:
             print(f"[SYNC] op {op['OpID']} ({op['OpType']}) falló: {e}", flush=True)

@@ -1433,12 +1433,12 @@ async function sendMessage() {
   btn.textContent = "Enviando...";
   showLoading("Enviando correo…");
   try {
-    await api(`/accounts/${accountId}/send`, {
+    const res = await api(`/accounts/${accountId}/send`, {
       method: "POST",
       body: JSON.stringify({ to, cc, subject, body_html: bodyHtml, attachments: state.composeAttachments, read_receipt: document.getElementById("c-receipt").checked }),
     });
     closeModal();
-    toast("Correo enviado", "ok");
+    toast(res && res.queued_sent ? "Correo enviado (se guardará en Enviados)" : "Correo enviado", "ok");
     loadActivity();
   } catch (e) {
     toast(e.message, "error");
