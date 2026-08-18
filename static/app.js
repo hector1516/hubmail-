@@ -1124,19 +1124,24 @@ function detailHtml(m) {
   });
   bodyHtml = proxyImages(bodyHtml);
   const fId = "bf-" + Math.random().toString(36).slice(2, 8);
-  const autoH = `<script>(function(){function r(){var h=document.documentElement.scrollHeight||document.body.scrollHeight;parent.postMessage({hmh:h,hid:"${fId}"},"*")}if(window.addEventListener){window.addEventListener("load",function(){setTimeout(r,40)});window.addEventListener("resize",r)}setTimeout(r,150)})()<\/script>`;
+  const autoH = `<script>(function(){function r(){var h=document.documentElement.scrollHeight||document.body.scrollHeight;parent.postMessage({hmh:h,hid:"${fId}"},"*")}if(window.addEventListener){window.addEventListener("load",function(){setTimeout(r,40)});window.addEventListener("resize",r);window.addEventListener("message",function(e){var d=e.data;if(d&&d.hid==="${fId}"&&d.zoom){document.documentElement.style.zoom=d.zoom;setTimeout(r,100)}})}setTimeout(r,150)})()<\/script>`;
 
   return `
     <div class="detail-toolbar">
-      <button class="btn-ghost btn btn-sm" id="d-back">←</button>
-      <button class="btn-ghost btn btn-sm" id="d-reply">↩ Responder</button>
-      <button class="btn-ghost btn btn-sm" id="d-fwd">↪ Reenviar</button>
-      <button class="btn-ghost btn btn-sm" id="d-flag">${m.flagged ? "★" : "☆"}</button>
-      <button class="btn-ghost btn btn-sm" id="d-unread" title="Marcar como no leído">◌ No leído</button>
-      <button class="btn-ghost btn btn-sm" id="d-print">🖨 Imprimir</button>
-      <button class="btn-ghost btn btn-sm" id="d-notspam" style="display:${m.spam ? "" : "none"}">No es spam</button>
+      <button class="btn-ghost btn btn-sm" id="d-back" title="Volver">←</button>
+      <button class="btn-ghost btn btn-sm" id="d-reply" title="Responder">↩<span class="btn-label">Responder</span></button>
+      <button class="btn-ghost btn btn-sm" id="d-fwd" title="Reenviar">↪<span class="btn-label">Reenviar</span></button>
+      <button class="btn-ghost btn btn-sm" id="d-flag" title="Marcar/desmarcar">${m.flagged ? "★" : "☆"}</button>
+      <button class="btn-ghost btn btn-sm" id="d-unread" title="Marcar como no leído">◌<span class="btn-label">No leído</span></button>
+      <button class="btn-ghost btn btn-sm" id="d-print" title="Imprimir">🖨<span class="btn-label">Imprimir</span></button>
+      <button class="btn-ghost btn btn-sm" id="d-notspam" title="No es spam" style="display:${m.spam ? "" : "none"}">🚫<span class="btn-label">No es spam</span></button>
+      <span class="detail-zoom">
+        <button class="btn-ghost btn btn-sm" id="d-zoomout" title="Alejar">−</button>
+        <span class="detail-zoom-val" id="d-zoom-val">100%</span>
+        <button class="btn-ghost btn btn-sm" id="d-zoomin" title="Acercar">+</button>
+      </span>
       <span class="spacer"></span>
-      <button class="btn-danger btn btn-sm" id="d-del">🗑</button>
+      <button class="btn-danger btn btn-sm" id="d-del" title="Eliminar">🗑</button>
     </div>
     <div class="detail-body">
       <div class="detail-subject">${esc(m.subject)}</div>
@@ -1160,6 +1165,7 @@ function renderDetail(m) {
 async function loadActivity() {
   const bar = document.getElementById("activity-bar");
   if (!bar) return;
+  bar.classList.remove("hidden");
   try {
     const sel = document.getElementById("activity-filter");
     const uf = sel && sel.value ? `&user_filter=${encodeURIComponent(sel.value)}` : "";
@@ -1190,6 +1196,18 @@ async function loadActivity() {
 function bindDetailActions(m) {
   const isModal = !!modalRoot.querySelector(".modal");
   const dp = document.getElementById("detail-pane");
+  const frame = document.querySelector(".body-frame");
+  let zoom = 1;
+  const setZoom = z => {
+    zoom = Math.min(2, Math.max(0.4, z));
+    const val = document.getElementById("d-zoom-val");
+    if (val) val.textContent = Math.round(zoom * 100) + "%";
+    if (frame && frame.contentWindow) frame.contentWindow.postMessage({ hid: frame.dataset.hid, zoom }, "*");
+  };
+  const zo = document.getElementById("d-zoomout");
+  if (zo) zo.onclick = () => setZoom(zoom - 0.1);
+  const zi = document.getElementById("d-zoomin");
+  if (zi) zi.onclick = () => setZoom(zoom + 0.1);
   document.getElementById("d-back").onclick = () => {
     state.currentMsgId = null;
     if (isModal) closeModal();
@@ -1831,33 +1849,177 @@ function openAccountForm(accountId) {
 }
 
 /* ============================================================ firma personal */
+const SIG_FONT_SIZES = [11, 12, 13, 14, 15, 16, 18, 20];
+const SIG_COLORS = ["#0B5394", "#3a3a3a", "#555555", "#888888", "#c0392b", "#27ae60", "#8e44ad", "#e67e22"];
+
+function sanitizeSigHtml(html) {
+  const doc = new DOMParser().parseFromString(html || "", "text/html");
+  doc.querySelectorAll("script,iframe,object,embed,link,meta,style,form,input,button").forEach(n => n.remove());
+  doc.querySelectorAll("*").forEach(n => {
+    [...n.attributes].forEach(a => {
+      const name = a.name.toLowerCase();
+      if (name.startsWith("on") ||
+          ((name === "href" || name === "src") && /^\s*javascript:/i.test(a.value))) {
+        n.removeAttribute(a.name);
+      }
+    });
+  });
+  return doc.body.innerHTML;
+}
+
+function sigEditorEmpty(editor) {
+  const txt = (editor.textContent || "").replace(/\u200b/g, "").trim();
+  return !txt && !editor.querySelector("img,table,hr");
+}
+
+function applyFontSize(px) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  if (range.collapsed) return;
+  try {
+    const span = document.createElement("span");
+    span.style.fontSize = px + "px";
+    range.surroundContents(span);
+    sel.removeAllRanges();
+  } catch (e) { /* selección con límites no alineados: se omite */ }
+}
+
 async function openSignatureForm() {
   let s = { display_name: "", phone: "", signature_html: "" };
   try { s = await api("/settings"); } catch (e) {}
   openModal(`
     <h2>Firma personal</h2>
-    <div class="field"><label>Nombre a mostrar</label><input id="sg-name" value="${esc(s.display_name || "")}" placeholder="Nombre Apellido"></div>
-    <div class="field"><label>Teléfono</label><input id="sg-phone" value="${esc(s.phone || "")}" placeholder="+52 81 0000 0000"></div>
-    <div class="field"><label>Firma HTML (se agrega en todos los correos)</label><textarea id="sg-sig">${esc(s.signature_html || "")}</textarea><label class="sig-prev-label">Vista previa</label><div class="sig-preview" id="sg-preview"></div></div>
+    <div class="modal-grid">
+      <div class="field"><label>Nombre a mostrar</label><input id="sg-name" value="${esc(s.display_name || "")}" placeholder="Nombre Apellido"></div>
+      <div class="field"><label>Teléfono</label><input id="sg-phone" value="${esc(s.phone || "")}" placeholder="+52 81 0000 0000"></div>
+    </div>
+    <div class="field">
+      <label>Editor visual (se agrega en todos los correos)</label>
+      <div class="sig-toolbar">
+        <button type="button" class="sig-tb" data-cmd="bold" title="Negrita"><b>B</b></button>
+        <button type="button" class="sig-tb" data-cmd="italic" title="Cursiva"><i>I</i></button>
+        <button type="button" class="sig-tb" data-cmd="underline" title="Subrayado"><u>U</u></button>
+        <button type="button" class="sig-tb" data-cmd="removeFormat" title="Quitar formato">∅</button>
+        <span class="sig-tb-sep"></span>
+        <select class="sig-tb-sel" id="sg-color" title="Color de texto">
+          <option value="">Color…</option>
+          ${SIG_COLORS.map(c => `<option value="${c}">${c}</option>`).join("")}
+        </select>
+        <select class="sig-tb-sel" id="sg-size" title="Tamaño de letra">
+          <option value="">Tamaño…</option>
+          ${SIG_FONT_SIZES.map(n => `<option value="${n}">${n} px</option>`).join("")}
+        </select>
+        <span class="sig-tb-sep"></span>
+        <button type="button" class="sig-tb" data-cmd="link" title="Insertar enlace">🔗</button>
+        <button type="button" class="sig-tb" data-cmd="image" title="Subir imagen">🖼️</button>
+        <button type="button" class="sig-tb" data-cmd="align-left" title="Alinear a la izquierda">Izq</button>
+        <button type="button" class="sig-tb" data-cmd="align-center" title="Centrar">Cen</button>
+        <button type="button" class="sig-tb" data-cmd="align-right" title="Alinear a la derecha">Der</button>
+        <span class="sig-tb-sep"></span>
+        <button type="button" class="sig-tb" id="sg-toggle" title="Cambiar a vista HTML">⟨⟩ HTML</button>
+        <input type="file" id="sg-file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" hidden>
+      </div>
+      <div class="sig-editor" id="sg-editor" contenteditable="true" spellcheck="false"></div>
+      <textarea class="sig-source" id="sg-sig" hidden></textarea>
+      <label class="sig-prev-label">La firma se guarda tal como se ve. Para insertar una imagen usa 🖼️; también puedes editar el HTML con ⟨⟩ HTML. Si la dejas vacía se usará la firma ECCSA automática.</label>
+    </div>
     <div class="actions">
       <button class="btn-ghost btn" id="sg-cancel">Cancelar</button>
       <button class="btn-primary btn" id="sg-save">Guardar firma</button>
     </div>`);
   document.getElementById("sg-cancel").onclick = () => openAccountsModal();
-  const sigEl = document.getElementById("sg-sig");
-  const prevEl = document.getElementById("sg-preview");
-  const renderPrev = () => {
-    prevEl.innerHTML = sigEl.value.trim()
-      ? sigEl.value
-      : '<span class="sig-empty">Sin firma personal. Si la dejas vacía se usará la firma ECCSA automática.</span>';
+  const editor = document.getElementById("sg-editor");
+  const srcEl = document.getElementById("sg-sig");
+  const toggleBtn = document.getElementById("sg-toggle");
+  const fileInput = document.getElementById("sg-file");
+  const initial = (s.signature_html || "").trim() || "<div><br></div>";
+  editor.innerHTML = initial;
+  srcEl.value = initial;
+
+  let sourceMode = false;
+  const showSource = on => {
+    sourceMode = on;
+    editor.hidden = on;
+    srcEl.hidden = !on;
+    toggleBtn.textContent = on ? "🎨 Visual" : "⟨⟩ HTML";
   };
-  sigEl.addEventListener("input", renderPrev);
-  renderPrev();
+
+  document.querySelectorAll(".sig-tb[data-cmd]").forEach(btn => {
+    btn.addEventListener("mousedown", e => e.preventDefault());
+    btn.addEventListener("click", () => {
+      const cmd = btn.dataset.cmd;
+      if (cmd === "link") {
+        const url = prompt("URL del enlace:", "https://");
+        if (url) document.execCommand("createLink", false, url);
+      } else if (cmd === "image") {
+        fileInput.click();
+      } else if (cmd === "align-left") {
+        document.execCommand("justifyLeft", false, null);
+      } else if (cmd === "align-center") {
+        document.execCommand("justifyCenter", false, null);
+      } else if (cmd === "align-right") {
+        document.execCommand("justifyRight", false, null);
+      } else {
+        document.execCommand(cmd, false, null);
+      }
+    });
+  });
+
+  document.getElementById("sg-color").addEventListener("mousedown", e => e.stopPropagation());
+  document.getElementById("sg-color").addEventListener("change", e => {
+    if (!e.target.value) return;
+    document.execCommand("foreColor", false, e.target.value);
+    e.target.value = "";
+  });
+  document.getElementById("sg-size").addEventListener("mousedown", e => e.stopPropagation());
+  document.getElementById("sg-size").addEventListener("change", e => {
+    if (!e.target.value) return;
+    applyFontSize(parseInt(e.target.value, 10));
+    e.target.value = "";
+  });
+
+  toggleBtn.addEventListener("click", () => {
+    if (sourceMode) {
+      editor.innerHTML = sanitizeSigHtml(srcEl.value) || "<div><br></div>";
+    } else {
+      srcEl.value = sanitizeSigHtml(editor.innerHTML);
+    }
+    showSource(!sourceMode);
+  });
+
+  fileInput.addEventListener("change", async () => {
+    const f = fileInput.files && fileInput.files[0];
+    fileInput.value = "";
+    if (!f) return;
+    if (f.size > 4 * 1024 * 1024) return toast("La imagen excede 4 MB", "error");
+    toast("Subiendo imagen…");
+    const fd = new FormData();
+    fd.append("file", f);
+    let res;
+    try {
+      res = await fetch("/api/signature/image", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + state.token },
+        body: fd,
+      });
+    } catch (e) {
+      return toast("Error de red al subir la imagen", "error");
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return toast(data.detail || "No se pudo subir la imagen", "error");
+    editor.focus();
+    document.execCommand("insertImage", false, data.data_uri);
+    toast("Imagen agregada", "ok");
+  });
+
   document.getElementById("sg-save").onclick = async () => {
+    const html = sourceMode ? sanitizeSigHtml(srcEl.value) : sanitizeSigHtml(editor.innerHTML);
+    const empty = sourceMode ? !srcEl.value.replace(/\s/g, "") : sigEditorEmpty(editor);
     const payload = {
       display_name: document.getElementById("sg-name").value.trim(),
       phone: document.getElementById("sg-phone").value.trim(),
-      signature_html: document.getElementById("sg-sig").value,
+      signature_html: empty ? "" : html,
     };
     try {
       await api("/settings", { method: "PUT", body: JSON.stringify(payload) });

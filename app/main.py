@@ -10,7 +10,7 @@ import base64
 from typing import Optional
 
 import jwt
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
@@ -549,6 +549,45 @@ def update_settings(payload: SettingsPayload, user=Depends(get_current_user)):
     finally:
         conn.close()
     return {"ok": True}
+
+
+SIG_IMG_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _sniff_image(data: bytes) -> str:
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:2] == b"BM":
+        return "image/bmp"
+    return ""
+
+
+@app.post("/api/signature/image")
+async def upload_signature_image(
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+):
+    data = await file.read(SIG_IMG_MAX_BYTES + 1)
+    if not data:
+        raise HTTPException(400, "Archivo vacío")
+    if len(data) > SIG_IMG_MAX_BYTES:
+        raise HTTPException(400, "La imagen excede 4 MB")
+    mime = _sniff_image(data)
+    if not mime:
+        raise HTTPException(
+            400, "Formato no permitido (usa PNG, JPG, GIF, WEBP o BMP)"
+        )
+    return {
+        "mime": mime,
+        "size": len(data),
+        "data_uri": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}",
+    }
 
 
 @app.get("/api/settings/colors")
