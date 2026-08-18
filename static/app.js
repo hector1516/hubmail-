@@ -1397,8 +1397,9 @@ function initRecipientAutocomplete(el) {
 }
 
 function openCompose(prefill = {}) {
+  const defAcc = state.accounts.find(a => a.is_default) || state.accounts[0];
   const accOptions = state.accounts.map(a =>
-    `<option value="${a.id}" ${a.id === state.currentAccountId ? "selected" : ""}>${esc(a.email)}</option>`).join("");
+    `<option value="${a.id}" ${a.id === (defAcc && defAcc.id) ? "selected" : ""}>${esc(a.email)}</option>`).join("");
   state.composeAttachments = [];
   openModal(`
     <h2>Nuevo mensaje</h2>
@@ -1802,6 +1803,7 @@ function openAccountForm(accountId) {
       <div class="field full"><label>Usuario</label><input id="f-user" value="${esc(v("username", ""))}"></div>
       <div class="field full"><label>Contraseña ${acc ? "(dejar vacío = no cambiar)" : ""}</label><input id="f-pass" type="password"></div>
       <div class="field full"><label>Color de la cuenta</label><input type="color" id="f-color" value="${acc ? accColor(acc) : ACC_FALLBACK_COLORS[Math.floor(Math.random() * ACC_FALLBACK_COLORS.length)]}" style="height:38px;padding:2px;cursor:pointer"></div>
+      <div class="field full"><label><input type="checkbox" id="f-default" ${acc && acc.is_default ? "checked" : ""}> Cuenta principal (remitente por defecto)</label></div>
     </div>
     <div class="actions">
       <button class="btn-ghost btn" id="f-cancel">Cancelar</button>
@@ -1855,7 +1857,7 @@ function openAccountForm(accountId) {
       smtp_port: parseInt(document.getElementById("f-smtp-port").value) || 465,
       username: document.getElementById("f-user").value.trim(),
       password: document.getElementById("f-pass").value,
-      is_default: false,
+      is_default: document.getElementById("f-default").checked,
       color: document.getElementById("f-color").value,
     };
   }
