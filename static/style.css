@@ -197,6 +197,28 @@ header {
   height: calc(var(--header-h) + env(safe-area-inset-top, 0px));
   padding-top: env(safe-area-inset-top, 0px);
   flex-shrink: 0;
+  position: relative;
+}
+.header-account {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: .3px;
+  text-align: center;
+  padding: 4px 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, .14);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .45);
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 18px; }
 .top-user {
@@ -697,6 +719,7 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
   .user-name { display: none; }
 
   header { gap: 6px; padding: 0 8px; }
+  .header-account { max-width: 44%; font-size: 13px; padding: 3px 10px; }
   #btn-compose .btn-label { display: none; }
   .icon-btn, .btn { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
   .btn-sm { min-height: 40px; }

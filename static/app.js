@@ -656,6 +656,7 @@ function renderShell() {
       <header>
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
         <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail<span class="top-user" id="btn-welcome" title="Ver mi resumen">${esc(state.user?.name || state.user?.email || "")}</span></div>
+        <div class="header-account" id="header-account"></div>
         <div class="header-right">
           ${state.user && state.user.is_admin ? '<button class="icon-btn" id="btn-activity" title="Log de actividad">📋</button>' : ""}
           <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
@@ -922,10 +923,22 @@ async function doMoveDrop(destAccId, destFolder) {
   }
 }
 
+function updateHeaderAccount() {
+  const el = document.getElementById("header-account");
+  if (!el) return;
+  const acc = state.accounts.find(a => a.id === state.currentAccountId);
+  if (!acc) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.textContent = acc.email;
+  el.style.color = accColor(acc);
+  el.title = "Cuenta activa: " + acc.email;
+}
+
 function renderContent() {
   const content = document.getElementById("content");
   const curAcc = state.accounts.find(a => a.id === state.currentAccountId);
   if (curAcc) content.style.setProperty("--acc-color", accColor(curAcc));
+  updateHeaderAccount();
   const totalUnread = state.messages.reduce((n, m) => n + (m.unread ? 1 : 0), 0);
   document.getElementById("notif-badge").textContent = state.unreadOnly ? "✓" : (totalUnread ? totalUnread : "");
 
