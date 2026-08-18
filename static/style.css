@@ -553,6 +553,20 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 .act-action { font-weight: 600; color: var(--accent); white-space: nowrap; }
 .act-date { color: var(--muted); white-space: nowrap; }
 .act-empty { text-align: center; color: var(--muted); padding: 24px; }
+.sync-hint { color: var(--muted); font-size: 12px; }
+.progress-bar { width: 100%; min-width: 120px; height: 14px; background: #e9edf3; border-radius: 8px; overflow: hidden; position: relative; }
+.progress-bar > div { height: 100%; border-radius: 8px; transition: width .5s ease; }
+.progress-idle > div { background: #d4dae2; }
+.progress-ok > div { background: #2eaf6f; }
+.progress-error > div { background: #e05b4e; }
+.progress-indet { background: linear-gradient(90deg, #e9edf3 25%, #bcd9ff 50%, #e9edf3 75%); background-size: 200% 100%; animation: sync-shimmer 1.2s linear infinite; }
+.progress-indet > div { background: linear-gradient(90deg, #4a90e2, #2f7bd6); }
+@keyframes sync-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.st-syncing { color: #2f7bd6; font-weight: 600; }
+.st-ok { color: #2eaf6f; font-weight: 600; }
+.st-error { color: #e05b4e; font-weight: 600; }
+.st-idle { color: var(--muted); }
+.err-text { color: #c0392b; max-width: 420px; white-space: normal; word-break: break-word; }
 .contact-item {
   display: flex;
   justify-content: space-between;

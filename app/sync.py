@@ -32,6 +32,39 @@ _folder_locks = {}
 _account_cooldown = {}
 _account_busy = {}
 
+_sync_progress = {}
+_sync_progress_guard = threading.Lock()
+
+
+def _set_progress(account_id, **kw):
+    with _sync_progress_guard:
+        p = _sync_progress.setdefault(account_id, {})
+        p.update(kw)
+        p["last_update"] = datetime.now()
+
+
+def get_sync_progress():
+    with _sync_progress_guard:
+        return {aid: dict(p) for aid, p in _sync_progress.items()}
+
+
+def _log_sync_error(account_id, folder, error):
+    if not error:
+        return
+    text = str(error)[:2000]
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO HUBMAIL_SyncErrors (AccountID, Folder, Error) VALUES (%s,%s,%s)",
+            (account_id, folder, text),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
 
 def _account_in_use(account_id):
     return _account_busy.get(account_id, False)
@@ -229,6 +262,20 @@ def _update_sync_state(account_id, folder):
                 "INSERT INTO HUBMAIL_SyncState (AccountID, Folder, LastSync, TotalCount) VALUES (%s,%s,NOW(),%s)",
                 (account_id, folder, total),
             )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _touch_sync_state(account_id, folder):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "UPDATE HUBMAIL_SyncState SET LastSync=NOW() "
+            "WHERE AccountID=%s AND Folder=%s",
+            (account_id, folder),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -513,6 +560,10 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
         fresh = last is not None and (datetime.now() - last).total_seconds() < SYNC_INTERVAL \
             and _folder_db_count(account_id, folder) == total
         if not with_bodies and fresh and not force:
+            try:
+                _touch_sync_state(account_id, folder)
+            except Exception as e:
+                print(f"[SYNC] touch syncstate {account_id}/{folder}: {e}", flush=True)
             return {"new": 0, "updated": 0, "total": total}
 
         try:
@@ -521,6 +572,7 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
             print(f"[SYNC] {account_id}/{folder}: uids={len(uids)}", flush=True)
         except IMAPError as e:
             print(f"[SYNC] {account_id}/{folder}: error IMAP uid/flags: {e}", flush=True)
+            _log_sync_error(account_id, folder, e)
             return {"new": 0, "updated": 0, "total": 0}
 
         existing = _load_existing(account_id, folder)
@@ -537,12 +589,14 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
                     new += _insert_many(account_id, folder, chunk)
             except Exception as e:
                 print(f"[SYNC] error fetch new {account_id}/{folder}: {e}", flush=True)
+                _log_sync_error(account_id, folder, f"fetch new: {e}")
         if missing_body and with_bodies:
             try:
                 for chunk in imap.iter_full_many(folder, missing_body):
                     updated += _update_body_many(account_id, folder, chunk)
             except Exception as e:
                 print(f"[SYNC] error fetch body {account_id}/{folder}: {e}", flush=True)
+                _log_sync_error(account_id, folder, f"fetch body: {e}")
         if with_bodies and new_uids:
             try:
                 apply_filters(account_id, folder, new_uids, imap)
@@ -603,9 +657,17 @@ def sync_folder(account_id, folder, force=False, with_bodies=True):
     account_id = canonical_account_id(account_id)
     if _account_in_use(account_id):
         total = _folder_db_count(account_id, folder)
+        try:
+            _touch_sync_state(account_id, folder)
+        except Exception as e:
+            print(f"[SYNC] touch syncstate {account_id}/{folder}: {e}", flush=True)
         return {"new": 0, "updated": 0, "total": total, "throttled": True}
     if _cooldown_active(account_id) and not force:
         total = _folder_db_count(account_id, folder)
+        try:
+            _touch_sync_state(account_id, folder)
+        except Exception as e:
+            print(f"[SYNC] touch syncstate {account_id}/{folder}: {e}", flush=True)
         return {"new": 0, "updated": 0, "total": total, "throttled": True}
 
     acc = _get_account_row(account_id)
@@ -990,25 +1052,41 @@ def sync_account(account_id):
     if not acc:
         return None
 
+    started = datetime.now()
     _mark_connected(account_id)
     _account_busy[account_id] = True
+    _set_progress(
+        account_id, status="syncing", started_at=started,
+        finished_at=None, duration=None, error=None,
+        current_folder=None, folder_index=0, folder_count=0,
+    )
     imap = IMAPClient(acc["IMAPHost"], acc["IMAPPort"], acc["Username"], decrypt_secret(acc["PasswordEnc"]))
     try:
         imap.connect()
         try:
             _apply_pending_ops(account_id, imap)
         except Exception as e:
+            msg = f"ops pendientes: {e}"
             print(f"[SYNC] account {account_id}: error aplicando ops pendientes: {e}", flush=True)
+            _log_sync_error(account_id, None, msg)
         lf = imap.list_folders()
         folders = lf["folders"]
         _save_folders(account_id, lf["delimiter"], folders)
     except IMAPError as e:
         print(f"[SYNC] account {account_id}: error conexión/listado: {e}", flush=True)
+        _log_sync_error(account_id, None, e)
         _account_busy[account_id] = False
+        _set_progress(
+            account_id, status="error", finished_at=datetime.now(),
+            duration=round((datetime.now() - started).total_seconds(), 1), error=str(e)[:500],
+        )
         return None
     result = {"new": 0, "updated": 0, "total": 0}
+    total_folders = len(folders)
+    _set_progress(account_id, folder_count=total_folders)
     try:
-        for f in folders:
+        for idx, f in enumerate(folders, start=1):
+            _set_progress(account_id, folder_index=idx, current_folder=f["name"])
             try:
                 r = _sync_folder_conn(account_id, f["name"], imap)
                 result["new"] += r.get("new", 0)
@@ -1016,6 +1094,7 @@ def sync_account(account_id):
                 result["total"] += r.get("total", 0)
             except Exception as e:
                 print(f"[SYNC] error folder {account_id}/{f['name']}: {e}", flush=True)
+                _log_sync_error(account_id, f["name"], e)
                 imap.close()
                 continue
         try:
@@ -1023,11 +1102,28 @@ def sync_account(account_id):
             if retention and not retention.get("skipped"):
                 print(f"[RETENTION] {account_id}: {retention}", flush=True)
         except Exception as e:
+            msg = f"retención: {e}"
             print(f"[RETENTION] error {account_id}: {e}", flush=True)
+            _log_sync_error(account_id, None, msg)
     finally:
         imap.close()
         _account_busy[account_id] = False
+    _set_progress(
+        account_id, status="ok", finished_at=datetime.now(),
+        duration=round((datetime.now() - started).total_seconds(), 1),
+        folder_index=total_folders, current_folder=None,
+    )
     return result
+
+
+_SYNC_MAX_ACCOUNTS = 4
+
+
+def _sync_account_safe(account_id):
+    try:
+        sync_account(account_id)
+    except Exception as e:
+        print(f"[SYNC] cuenta {account_id}: error {e}", flush=True)
 
 
 def sync_all_accounts():
@@ -1038,8 +1134,18 @@ def sync_all_accounts():
         ids = [r["AccountID"] for r in cur.fetchall()]
     finally:
         conn.close()
+    if not ids:
+        return
+    sem = threading.BoundedSemaphore(_SYNC_MAX_ACCOUNTS)
+    threads = []
+
+    def _run(aid):
+        with sem:
+            _sync_account_safe(aid)
+
     for aid in ids:
-        try:
-            sync_account(aid)
-        except Exception:
-            continue
+        t = threading.Thread(target=_run, args=(aid,), daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()

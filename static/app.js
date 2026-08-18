@@ -205,6 +205,97 @@ function renderActivityModal(data, sel) {
   document.getElementById("act-user").onchange = () => document.getElementById("act-refresh").click();
 }
 
+let syncStatusTimer = null;
+
+async function openAdminSyncStatus() {
+  if (syncStatusTimer) clearInterval(syncStatusTimer);
+  openModal(`
+    <div class="act-head">
+      <h3>📊 Estado de sincronización de cuentas</h3>
+      <button class="icon-btn btn-sm" onclick="closeModal()">✕</button>
+    </div>
+    <div class="act-filters">
+      <span class="sync-hint">Se actualiza solo cada 3 segundos. Duración = tiempo del último ciclo de esa cuenta.</span>
+    </div>
+    <div class="act-table-wrap">
+      <table class="act-table">
+        <thead><tr><th>Cuenta</th><th>Estado</th><th>Carpeta actual</th><th>Duración</th><th>Último sync</th><th>Progreso</th></tr></thead>
+        <tbody id="sync-status-list"><tr><td colspan="6" class="act-empty">Cargando…</td></tr></tbody>
+      </table>
+    </div>`, "modal-lg");
+  await renderSyncStatus();
+  syncStatusTimer = setInterval(async () => {
+    if (!document.getElementById("sync-status-list")) {
+      clearInterval(syncStatusTimer);
+      syncStatusTimer = null;
+      return;
+    }
+    await renderSyncStatus();
+  }, 3000);
+}
+
+async function renderSyncStatus() {
+  const list = document.getElementById("sync-status-list");
+  if (!list) return;
+  try {
+    const data = await api("/admin/sync-status");
+    const rows = (data.accounts || []).map(a => {
+      const status = a.status || "idle";
+      const pct = a.folder_count ? Math.round((a.folder_index / a.folder_count) * 100) : 0;
+      const barCls = status === "syncing" ? "progress-indet"
+        : status === "error" ? "progress-error"
+        : status === "ok" ? "progress-ok" : "progress-idle";
+      const barWidth = (status === "syncing" && a.folder_count) ? Math.max(6, pct) + "%" : "100%";
+      const statusText = status === "syncing" ? `Sincronizando ${pct}%`
+        : status === "error" ? `Error${a.error ? ": " + a.error : ""}`
+        : status === "ok" ? "OK" : "En espera";
+      return `<tr>
+        <td>${esc(a.email)}</td>
+        <td><span class="st-${status}">${esc(statusText)}</span></td>
+        <td>${esc(a.current_folder || "—")}</td>
+        <td>${a.duration != null ? esc(a.duration) + " s" : "—"}</td>
+        <td class="act-date">${esc(a.last_sync || "—")}</td>
+        <td><div class="progress-bar ${barCls}"><div style="width:${barWidth}"></div></div></td>
+      </tr>`;
+    }).join("") || '<tr><td colspan="6" class="act-empty">Sin cuentas</td></tr>';
+    list.innerHTML = rows;
+  } catch (e) {
+    if (document.getElementById("sync-status-list")) {
+      list.innerHTML = `<tr><td colspan="6" class="act-empty">Error: ${esc(e.message)}</td></tr>`;
+    }
+  }
+}
+
+async function openAdminErrors() {
+  try {
+    const data = await api("/admin/sync-errors");
+    const items = (data.items || []).map(it => `
+      <tr>
+        <td>${esc(it.account_id)}</td>
+        <td>${esc(it.folder || "—")}</td>
+        <td class="err-text">${esc(it.error)}</td>
+        <td class="act-date">${esc(it.created_at || "")}</td>
+      </tr>`).join("") || '<tr><td colspan="4" class="act-empty">Sin errores registrados</td></tr>';
+    openModal(`
+      <div class="act-head">
+        <h3>⚠️ Errores de sincronización</h3>
+        <button class="icon-btn btn-sm" onclick="closeModal()">✕</button>
+      </div>
+      <div class="act-filters">
+        <button class="btn btn-ghost btn-sm" id="err-refresh">Refrescar</button>
+      </div>
+      <div class="act-table-wrap">
+        <table class="act-table">
+          <thead><tr><th>Cuenta</th><th>Carpeta</th><th>Error</th><th>Fecha</th></tr></thead>
+          <tbody>${items}</tbody>
+        </table>
+      </div>`, "modal-lg");
+    document.getElementById("err-refresh").onclick = () => openAdminErrors();
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
 async function applyWallpaper() {
   try {
     const res = await fetch("/api/wallpaper");
@@ -658,7 +749,7 @@ function renderShell() {
         <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail<span class="top-user" id="btn-welcome" title="Ver mi resumen">${esc(state.user?.name || state.user?.email || "")}</span></div>
         <div class="header-account" id="header-account"></div>
         <div class="header-right">
-          ${state.user && state.user.is_admin ? '<button class="icon-btn" id="btn-activity" title="Log de actividad">📋</button>' : ""}
+          ${state.user && state.user.is_admin ? '<button class="icon-btn" id="btn-syncstatus" title="Estado de sincronización">📊</button><button class="icon-btn" id="btn-errors" title="Errores de sincronización">⚠️</button><button class="icon-btn" id="btn-activity" title="Log de actividad">📋</button>' : ""}
           <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
           <button class="icon-btn btn-primary" id="btn-compose">✉️ <span class="btn-label">Redactar</span></button>
           <button class="icon-btn" id="btn-accounts" title="Cuentas y firma">⚙️</button>
@@ -688,6 +779,10 @@ function renderShell() {
   document.getElementById("btn-logout").onclick = logout;
   const btnActivity = document.getElementById("btn-activity");
   if (btnActivity) btnActivity.onclick = () => openAdminActivity();
+  const btnSyncStatus = document.getElementById("btn-syncstatus");
+  if (btnSyncStatus) btnSyncStatus.onclick = () => openAdminSyncStatus();
+  const btnErrors = document.getElementById("btn-errors");
+  if (btnErrors) btnErrors.onclick = () => openAdminErrors();
   document.getElementById("btn-welcome").onclick = () => openWelcome();
   document.getElementById("btn-notif").onclick = () => {
     state.unreadOnly = !state.unreadOnly;

@@ -84,15 +84,33 @@ _sync_stop = False
 
 def _background_sync_loop():
     time.sleep(20)  # primer sync poco después de arrancar
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT AccountID FROM HUBMAIL_Accounts WHERE CanonicalAccountID IS NULL")
+        ids = [r["AccountID"] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+    def account_loop(aid):
+        while not _sync_stop:
+            try:
+                syncmod.sync_account(aid)
+            except Exception:
+                pass
+            for _ in range(SYNC_PERIOD):
+                if _sync_stop:
+                    return
+                time.sleep(1)
+
+    # Un hilo por cuenta: cada una mantiene su propia cadencia de 5 min,
+    # de modo que una cuenta lenta ya no bloquea a las demás.
+    for aid in ids:
+        threading.Thread(target=account_loop, args=(aid,), daemon=True, name=f"sync-{aid}").start()
+        time.sleep(5)  # escalonar conexiones IMAP al arranque
+
     while not _sync_stop:
-        try:
-            syncmod.sync_all_accounts()
-        except Exception:
-            pass
-        for _ in range(SYNC_PERIOD):
-            if _sync_stop:
-                return
-            time.sleep(1)
+        time.sleep(1)
 
 
 def _backfill_user_settings():
@@ -964,6 +982,83 @@ def admin_activity(
             for r in rows
         ],
     }
+
+
+@app.get("/api/admin/sync-errors")
+def admin_sync_errors(
+    user=Depends(get_current_user),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT AccountID, EmailAddress FROM HUBMAIL_Accounts "
+            "WHERE CanonicalAccountID IS NULL ORDER BY EmailAddress"
+        )
+        accounts = [{"id": r["AccountID"], "email": r["EmailAddress"]} for r in cur.fetchall()]
+        cur.execute(
+            "SELECT AccountID, Folder, Error, CreatedAt FROM HUBMAIL_SyncErrors "
+            "ORDER BY CreatedAt DESC, ErrorID DESC LIMIT %s",
+            (limit,),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return {
+        "accounts": accounts,
+        "items": [
+            {
+                "account_id": r["AccountID"],
+                "folder": r["Folder"] or "",
+                "error": r["Error"] or "",
+                "created_at": r["CreatedAt"].strftime("%d/%m/%Y %H:%M:%S") if r["CreatedAt"] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/api/admin/sync-status")
+def admin_sync_status(user=Depends(get_current_user)):
+    if not is_admin(user):
+        raise HTTPException(403, "Solo el administrador")
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT AccountID, EmailAddress, DisplayName FROM HUBMAIL_Accounts "
+            "WHERE CanonicalAccountID IS NULL ORDER BY AccountID"
+        )
+        accs = {r["AccountID"]: r for r in cur.fetchall()}
+        cur.execute(
+            "SELECT AccountID, MAX(LastSync) AS LastSync FROM HUBMAIL_SyncState GROUP BY AccountID"
+        )
+        last_by_acc = {r["AccountID"]: r["LastSync"] for r in cur.fetchall()}
+    finally:
+        conn.close()
+    progress = syncmod.get_sync_progress()
+    accounts = []
+    for aid in sorted(accs):
+        a = accs[aid]
+        p = progress.get(aid, {})
+        accounts.append({
+            "account_id": aid,
+            "email": a["EmailAddress"],
+            "display_name": a["DisplayName"] or "",
+            "status": p.get("status", "idle"),
+            "current_folder": p.get("current_folder") or "",
+            "folder_index": p.get("folder_index", 0),
+            "folder_count": p.get("folder_count", 0),
+            "started_at": p.get("started_at").strftime("%H:%M:%S") if p.get("started_at") else None,
+            "finished_at": p.get("finished_at").strftime("%H:%M:%S") if p.get("finished_at") else None,
+            "duration": p.get("duration"),
+            "error": (p.get("error") or "")[:300],
+            "last_sync": last_by_acc.get(aid).strftime("%d/%m/%Y %H:%M") if last_by_acc.get(aid) else None,
+        })
+    return {"accounts": accounts}
 
 
 def _msg_row_to_dict(r):
