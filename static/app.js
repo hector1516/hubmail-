@@ -643,7 +643,10 @@ function startFolderRefresh() {
 window.addEventListener("message", e => {
   if (e.data && e.data.hmh) {
     const f = document.querySelector(`.body-frame[data-hid="${e.data.hid}"]`);
-    if (f) f.style.height = (e.data.hmh + 24) + "px";
+    if (f) {
+      const cur = parseFloat(f.style.height) || 0;
+      if (Math.abs(e.data.hmh - cur) > 2) f.style.height = e.data.hmh + "px";
+    }
   }
 });
 
@@ -1124,7 +1127,7 @@ function detailHtml(m) {
   });
   bodyHtml = proxyImages(bodyHtml);
   const fId = "bf-" + Math.random().toString(36).slice(2, 8);
-  const autoH = `<script>(function(){function r(){var h=document.documentElement.scrollHeight||document.body.scrollHeight;parent.postMessage({hmh:h,hid:"${fId}"},"*")}if(window.addEventListener){window.addEventListener("load",function(){setTimeout(r,40)});window.addEventListener("resize",r);window.addEventListener("message",function(e){var d=e.data;if(d&&d.hid==="${fId}"&&d.zoom){document.documentElement.style.zoom=d.zoom;setTimeout(r,100)}})}setTimeout(r,150)})()<\/script>`;
+  const autoH = `<script>(function(){var w=-1;function r(){var h=document.documentElement.scrollHeight||document.body.scrollHeight;if(h!==w){w=h;parent.postMessage({hmh:h,hid:"${fId}"},"*")}}if(window.addEventListener){window.addEventListener("load",function(){setTimeout(r,40)});window.addEventListener("resize",r);window.addEventListener("message",function(e){var d=e.data;if(d&&d.hid==="${fId}"&&d.zoom){document.documentElement.style.zoom=d.zoom;setTimeout(r,100)}})}setTimeout(r,150)})()<\/script>`;
 
   return `
     <div class="detail-toolbar">
