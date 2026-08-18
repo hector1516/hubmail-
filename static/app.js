@@ -1141,6 +1141,7 @@ function detailHtml(m) {
         <button class="btn-ghost btn btn-sm" id="d-zoomin" title="Acercar">+</button>
       </span>
       <span class="spacer"></span>
+      <button class="btn-ghost btn btn-sm" id="d-filter" title="Crear filtro a partir de este mensaje">⛭<span class="btn-label">Crear filtro</span></button>
       <button class="btn-danger btn btn-sm" id="d-del" title="Eliminar">🗑</button>
     </div>
     <div class="detail-body">
@@ -1249,6 +1250,15 @@ function bindDetailActions(m) {
     openCompose({ subject: m.subject.startsWith("Fwd:") ? m.subject : "Fwd: " + m.subject });
   };
   document.getElementById("d-print").onclick = () => printMessage(m);
+  const df = document.getElementById("d-filter");
+  if (df) df.onclick = () => {
+    const from = m.from[0];
+    const email = from && from.email;
+    openFilterForm(null, {
+      name: email ? "Mensajes de " + email : "Filtro desde mensaje",
+      conditions: [{ field: "from", op: "contains", value: email || "" }],
+    });
+  };
   const ns = document.getElementById("d-notspam");
   if (ns) ns.onclick = async () => {
     await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=notspam`, { method: "PATCH" }).catch(e => toast(e.message, "error"));
@@ -2084,7 +2094,7 @@ async function openFiltersManager() {
   });
 }
 
-function openFilterForm(filterId) {
+function openFilterForm(filterId, prefill) {
   const f = filterId ? null : null;
   let cur = null;
   if (filterId) {
@@ -2093,7 +2103,7 @@ function openFilterForm(filterId) {
       render(cur);
     }).catch(e => toast(e.message, "error"));
   } else {
-    render({ scope: "ACCOUNT", account_id: state.currentAccountId, name: "", conditions: [{ field: "from", op: "contains", value: "" }], action: "spam", action_folder: "", enabled: true, order_no: 0 });
+    render(Object.assign({ scope: "ACCOUNT", account_id: state.currentAccountId, name: "", conditions: [{ field: "from", op: "contains", value: "" }], action: "spam", action_folder: "", enabled: true, order_no: 0 }, prefill || {}));
   }
   function render(base) {
     const accOpts = state.accounts.map(a => `<option value="${a.id}" ${a.id === base.account_id ? "selected" : ""}>${esc(a.email)}</option>`).join("");
