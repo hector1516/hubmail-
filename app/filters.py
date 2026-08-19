@@ -323,7 +323,8 @@ def sweep_filters(account_id, imap, limit=500):
             "SELECT Folder, UID FROM HUBMAIL_Messages "
             "WHERE AccountID=%s AND FilteredAt IS NULL "
             "AND (BodyHtml IS NOT NULL OR BodyText IS NOT NULL) "
-            "ORDER BY SyncedAt LIMIT %s",
+            "ORDER BY CASE WHEN Folder='INBOX' THEN 0 ELSE 1 END, SyncedAt "
+            "LIMIT %s",
             (account_id, limit),
         )
         groups = OrderedDict()
