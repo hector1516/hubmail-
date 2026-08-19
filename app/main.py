@@ -7,6 +7,7 @@ import time
 import urllib.parse
 import urllib.request
 import base64
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
@@ -29,6 +30,18 @@ from . import sync as syncmod
 from . import filters as filtmod
 
 app = FastAPI(title="HUBMail", version="0.1.0")
+
+# MySQL almacena los timestamps en UTC (NOW() del contenedor); la app los
+# muestra en hora de México (UTC-6, sin horario de verano desde 2022).
+_MX_TZ = timezone(timedelta(hours=-6))
+
+
+def _fmt_local(dt, fmt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_MX_TZ).strftime(fmt)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1054,7 +1067,7 @@ def admin_sync_errors(
                 "account_id": r["AccountID"],
                 "folder": r["Folder"] or "",
                 "error": r["Error"] or "",
-                "created_at": r["CreatedAt"].strftime("%d/%m/%Y %H:%M:%S") if r["CreatedAt"] else None,
+                "created_at": _fmt_local(r["CreatedAt"], "%d/%m/%Y %H:%M:%S"),
             }
             for r in rows
         ],
@@ -1092,11 +1105,11 @@ def admin_sync_status(user=Depends(get_current_user)):
             "current_folder": p.get("current_folder") or "",
             "folder_index": p.get("folder_index", 0),
             "folder_count": p.get("folder_count", 0),
-            "started_at": p.get("started_at").strftime("%H:%M:%S") if p.get("started_at") else None,
-            "finished_at": p.get("finished_at").strftime("%H:%M:%S") if p.get("finished_at") else None,
+            "started_at": _fmt_local(p.get("started_at"), "%H:%M:%S"),
+            "finished_at": _fmt_local(p.get("finished_at"), "%H:%M:%S"),
             "duration": p.get("duration"),
             "error": (p.get("error") or "")[:300],
-            "last_sync": last_by_acc.get(aid).strftime("%d/%m/%Y %H:%M") if last_by_acc.get(aid) else None,
+            "last_sync": _fmt_local(last_by_acc.get(aid), "%d/%m/%Y %H:%M"),
         })
     return {"accounts": accounts}
 
@@ -1107,7 +1120,7 @@ def _msg_row_to_dict(r):
         "subject": r["Subject"] or "(sin asunto)",
         "from": [{"name": r["FromName"] or "", "email": r["FromEmail"] or ""}],
         "to": syncmod._addr_from_json(r["ToText"]),
-        "date": r["DateSent"].strftime("%Y-%m-%d %H:%M") if r["DateSent"] else "",
+        "date": _fmt_local(r["DateSent"], "%Y-%m-%d %H:%M") or "",
         "unread": not r["Seen"],
         "flagged": bool(r["Flagged"]),
         "has_attachments": bool(r["HasAttachments"]),
@@ -1145,7 +1158,7 @@ def _msg_detail_row(r, attachments=None):
         "from": [{"name": r["FromName"] or "", "email": r["FromEmail"] or ""}],
         "to": syncmod._addr_from_json(r["ToText"]),
         "cc": syncmod._addr_from_json(r["CcText"]),
-        "date": r["DateSent"].strftime("%Y-%m-%d %H:%M") if r["DateSent"] else "",
+        "date": _fmt_local(r["DateSent"], "%Y-%m-%d %H:%M") or "",
         "unread": not r["Seen"],
         "flagged": bool(r["Flagged"]),
         "spam": bool(r.get("Spam")),
@@ -1179,7 +1192,7 @@ def list_messages(
         )
         row = cur.fetchone()
         if row and row["LastSync"]:
-            last_sync = row["LastSync"].strftime("%d/%m/%Y %H:%M")
+            last_sync = _fmt_local(row["LastSync"], "%d/%m/%Y %H:%M")
     finally:
         conn0.close()
 
@@ -1507,7 +1520,7 @@ def new_messages(user=Depends(get_current_user)):
                 "from_name": r["FromName"] or "",
                 "from_email": r["FromEmail"] or "",
                 "subject": r["Subject"] or "(sin asunto)",
-                "date": r["DateSent"].strftime("%d/%m/%Y %H:%M") if r["DateSent"] else "",
+                "date": _fmt_local(r["DateSent"], "%d/%m/%Y %H:%M") or "",
                 "preview": _preview_lines(r["BodyText"], r["BodyHtml"]),
             }
             for r in cur.fetchall()

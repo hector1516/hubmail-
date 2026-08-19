@@ -4,7 +4,7 @@ import email.utils
 import imaplib
 import base64
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
 from html import escape
@@ -67,7 +67,7 @@ def _fmt_date(value):
         dt = parsedate_to_datetime(value)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+        return dt.astimezone(timezone(timedelta(hours=-6))).strftime("%Y-%m-%d %H:%M")
     except Exception:
         return value
 
