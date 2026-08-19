@@ -334,7 +334,7 @@ function renderLogin() {
         <div class="field"><label>Correo</label><input id="lg-email" type="email" placeholder="usuario@ecc-sa.com.mx" autocomplete="username"></div>
         <div class="field"><label>Contraseña</label><input id="lg-pass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
         <button class="btn btn-primary" id="lg-btn" style="width:100%;padding:11px">Iniciar sesión</button>
-        <div class="login-foot">HUBMail · Electronorte de Culiacán</div>
+        <div class="login-foot">⚡ ECCSA Automation - Soluciones en Automatización y Control © 2026 ⚙️ · v0.1.0</div>
       </div>
     </div>`;
   applyWallpaper();
