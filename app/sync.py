@@ -754,10 +754,18 @@ def _save_folders(account_id, delimiter, folders):
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM HUBMAIL_Folders WHERE AccountID=%s", (account_id,))
-        if folders:
+        seen = set()
+        rows = []
+        for f in folders:
+            name = (f["name"] or "").rstrip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            rows.append((account_id, name, delimiter, ",".join(f.get("flags") or [])))
+        if rows:
             cur.executemany(
                 "INSERT INTO HUBMAIL_Folders (AccountID, Folder, Delimiter, Flags) VALUES (%s,%s,%s,%s)",
-                [(account_id, f["name"], delimiter, ",".join(f.get("flags") or [])) for f in folders],
+                rows,
             )
         conn.commit()
     finally:
@@ -1075,6 +1083,18 @@ def sync_account(account_id):
     except IMAPError as e:
         print(f"[SYNC] account {account_id}: error conexión/listado: {e}", flush=True)
         _log_sync_error(account_id, None, e)
+        imap.close()
+        _account_busy[account_id] = False
+        _set_progress(
+            account_id, status="error", finished_at=datetime.now(),
+            duration=round((datetime.now() - started).total_seconds(), 1), error=str(e)[:500],
+        )
+        return None
+    except Exception as e:
+        msg = f"conexión/listado: {e}"
+        print(f"[SYNC] account {account_id}: error {msg}", flush=True)
+        _log_sync_error(account_id, None, str(e)[:2000])
+        imap.close()
         _account_busy[account_id] = False
         _set_progress(
             account_id, status="error", finished_at=datetime.now(),

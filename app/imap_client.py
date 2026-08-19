@@ -145,6 +145,7 @@ class IMAPClient:
         if typ != "OK":
             raise IMAPError("Error al listar carpetas")
         folders = []
+        seen = set()
         delimiter = ""
         for line in data:
             try:
@@ -154,7 +155,11 @@ class IMAPClient:
             flags, sep, name = _parse_folder_line(s)
             if not delimiter and sep:
                 delimiter = sep
-            folders.append({"name": _utf7_decode(name), "flags": flags})
+            name = _utf7_decode(name).rstrip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            folders.append({"name": name, "flags": flags})
         return {"delimiter": delimiter, "folders": folders}
 
     def list_messages(self, folder="INBOX", criteria="ALL", page=1, page_size=25, unread_only=False):
