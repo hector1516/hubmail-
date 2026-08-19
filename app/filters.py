@@ -268,6 +268,40 @@ def _db_move_message(account_id, folder, uid, dest):
         conn.close()
 
 
+def _spam_folder(account_id):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT Folder FROM HUBMAIL_Folders WHERE AccountID=%s ORDER BY Folder",
+            (account_id,),
+        )
+        folders = [r["Folder"] for r in cur.fetchall()]
+    finally:
+        conn.close()
+    for f in folders:
+        low = f.lower()
+        if low in ("junk", "spam", "junk email", "spam folder", "correo no deseado"):
+            return f
+    for f in folders:
+        low = f.lower()
+        if "junk" in low or "spam" in low or "no deseado" in low:
+            return f
+    return None
+
+
+def _apply_spam(account_id, folder, row, imap):
+    uid = str(row["UID"])
+    _db_set_spam(account_id, row["UID"], True)
+    dest = _spam_folder(account_id)
+    if dest and dest != folder:
+        try:
+            imap.move_message(folder, uid, dest)
+            _db_move_message(account_id, folder, row["UID"], dest)
+        except Exception as e:
+            print(f"[FILTER] spam move error {e}", flush=True)
+
+
 def _apply_action(f, account_id, folder, row, imap):
     uid = str(row["UID"])
     action = f.get("Action") or "spam"
@@ -278,7 +312,7 @@ def _apply_action(f, account_id, folder, row, imap):
         except Exception as e:
             print(f"[FILTER] mark_read error {e}", flush=True)
     elif action == "spam":
-        _db_set_spam(account_id, row["UID"], True)
+        _apply_spam(account_id, folder, row, imap)
     elif action == "delete":
         try:
             imap.delete_message(folder, uid)
@@ -324,7 +358,7 @@ def apply_filters(account_id, folder, uids, imap):
             if ip:
                 dns_checked += 1
                 if check_dnsbl(ip):
-                    _db_set_spam(account_id, row["UID"], True)
+                    _apply_spam(account_id, folder, row, imap)
         if row.get("BodyHtml") or row.get("BodyText"):
             processed.append(row["UID"])
     if processed:

@@ -891,7 +891,7 @@ def account_unread(account_id: int, user=Depends(get_current_user)):
         cur = conn.cursor(as_dict=True)
         cur.execute(
             "SELECT Folder, COUNT(*) AS N FROM HUBMAIL_Messages "
-            "WHERE AccountID=%s AND Seen=0 GROUP BY Folder",
+            "WHERE AccountID=%s AND Seen=0 AND NOT (Folder='INBOX' AND Spam=1) GROUP BY Folder",
             (acc["AccountID"],),
         )
         rows = cur.fetchall()
@@ -1173,6 +1173,8 @@ def list_messages(
         cur = conn.cursor(as_dict=True)
         where = "AccountID=%s AND Folder=%s"
         params = [account_id, folder]
+        if folder == "INBOX":
+            where += " AND Spam=0"
         if q:
             like = f"%{q}%"
             where += " AND (Subject LIKE %s OR FromName LIKE %s OR FromEmail LIKE %s)"
