@@ -221,6 +221,24 @@ def _db_mark_filtered_many(account_id, folder, uids):
         conn.close()
 
 
+def reset_filtered(scope, account_id=None):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        if scope == "GLOBAL":
+            cur.execute("UPDATE HUBMAIL_Messages SET FilteredAt=NULL")
+        else:
+            cur.execute(
+                "UPDATE HUBMAIL_Messages SET FilteredAt=NULL "
+                "WHERE AccountID=%s OR AccountID IN "
+                "(SELECT AccountID FROM HUBMAIL_Accounts WHERE CanonicalAccountID=%s)",
+                (account_id, account_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _db_delete_messages(account_id, folder, uids):
     if not uids:
         return
