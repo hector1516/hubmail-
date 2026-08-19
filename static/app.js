@@ -471,11 +471,35 @@ function showWelcome(d) {
 
   const noteHtml = `<div class="wm-note">🧹 Nota del sistema: Spam, Basura y Papelera se autolimpian cada día, como buenos ciudadanos. Ahí solo viven los últimos 10 correos y nada mayor a una semana. La limpieza es cortesía de HUBMail; el resto es tu problema. 😌</div>`;
 
+  const SPAM_QUOTES = [
+    "Cada príncipe nigeriano fue interceptado antes de su coronación. 👑",
+    "La IA de ECCSA lee el spam para que tú no tengas que hacerlo. Te salva la vista (y el seso). 🧠",
+    "Adelgazó tu bandeja y ni cuenta te diste. Es como un régimen, pero en tu correo. 🏋️",
+    "Los herederos millonarios y sus parientes enfermos ya no llegan ni al portón. 🚪",
+    "Es tan buena que el spam ya casi ni te saluda. ¿La sientes fría? Es profesional. 😎",
+    "El spam no desapareció: solo aprendió a tener miedo. 🫣",
+  ];
+  const spamHtml = `<div class="wm-spam">
+    <div class="wm-spam-head">
+      <div class="wm-spam-logo">🛡️</div>
+      <div>
+        <div class="wm-spam-title">ECCSA Anti-Spam</div>
+        <div class="wm-spam-sub">Inteligencia Artificial en defensa de tu bandeja</div>
+      </div>
+    </div>
+    <div class="wm-spam-stats">
+      <div class="wm-spam-stat"><div class="wm-num">${esc(d.spam_blocked_7d ?? 0)}</div><div>neutralizados en 7 días</div></div>
+      <div class="wm-spam-stat"><div class="wm-num">${esc(d.spam_total ?? 0)}</div><div>en cuarentena</div></div>
+    </div>
+    <div class="wm-spam-quote">${SPAM_QUOTES[Math.floor(Math.random() * SPAM_QUOTES.length)]}</div>
+  </div>`;
+
   openModal(`
     <div class="welcome-modal">
       <div class="wm-hero">${greeting}</div>
       <div class="wm-slogan">${welcomeLine(firstName, total)}</div>
       ${bodyHtml}
+      ${spamHtml}
       ${noteHtml}
       <div class="actions">
         <button class="btn-primary btn" id="wm-close">${total ? "¡A trabajar! 💪" : "¡Perfecto! ✅"}</button>

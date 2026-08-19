@@ -642,6 +642,17 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
 .wm-activity .activity-item { font-size: 12px; }
 .wm-activity .activity-account { font-size: 10px; color: var(--muted); white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
 .wm-note { font-size: 11px; color: var(--muted); font-style: italic; margin-top: 14px; padding: 8px 12px; background: #f6f8fb; border: 1px dashed var(--border); border-radius: 8px; text-align: left; line-height: 1.45; }
+
+.wm-spam { border: 1px solid #cfe3c7; background: linear-gradient(135deg,#f4faf0,#eef7ff); border-radius: 12px; padding: 14px 16px; margin-top: 14px; text-align: left; }
+.wm-spam-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.wm-spam-logo { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg,#2f7d20,#1a5fb4); color: #fff; font-size: 22px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(47,125,32,.35); flex-shrink: 0; }
+.wm-spam-title { font-size: 14px; font-weight: 800; }
+.wm-spam-sub { font-size: 11px; color: var(--muted); }
+.wm-spam-stats { display: flex; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.wm-spam-stat { flex: 1; min-width: 120px; background: #fff; border: 1px solid #dbe7d3; border-radius: 10px; padding: 10px 12px; text-align: center; }
+.wm-spam-stat .wm-num { font-size: 24px; font-weight: 800; color: #2f7d20; line-height: 1; }
+.wm-spam-stat > div:last-child { font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .03em; }
+.wm-spam-quote { font-size: 12px; font-style: italic; color: #3d5a2f; background: rgba(255,255,255,.6); border: 1px dashed #bcd3b0; border-radius: 8px; padding: 7px 10px; }
 .admin-hint { color: var(--muted); font-size: 12px; margin-bottom: 10px; background: rgba(0,0,0,.04); padding: 8px 10px; border-radius: 8px; }
 .assign-row { padding: 6px 4px; border-bottom: 1px solid #eef1f6; font-size: 13px; }
 .assign-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
@@ -771,6 +782,7 @@ main { flex: 1; display: flex; overflow: hidden; --acc-color: #2a6fd6; }
   #toast-root { bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
   .wm-hero { font-size: 18px; }
   .wm-stat { min-width: 0; flex: 1; }
+  .wm-spam-stat { min-width: 0; flex: 1; }
   .activity-item { flex-wrap: wrap; }
   .msg-item .snippet { display: none; }
   .bulk-bar { gap: 4px; }

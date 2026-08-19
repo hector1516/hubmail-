@@ -453,6 +453,19 @@ def welcome_summary(user=Depends(get_current_user)):
             }
             for r in cur.fetchall()
         ]
+        cur.execute(
+            "SELECT COUNT(*) AS N FROM HUBMAIL_Messages "
+            f"WHERE AccountID IN ({ph}) AND Spam=1",
+            tuple(ids),
+        )
+        spam_total = cur.fetchone()["N"] or 0
+        cur.execute(
+            "SELECT COUNT(*) AS N FROM HUBMAIL_Messages "
+            f"WHERE AccountID IN ({ph}) AND Spam=1 "
+            "AND FilteredAt >= (NOW() - INTERVAL 7 DAY)",
+            tuple(ids),
+        )
+        spam_7d = cur.fetchone()["N"] or 0
         return {
             "first_login": last_login is None,
             "last_login": last_login,
@@ -460,6 +473,8 @@ def welcome_summary(user=Depends(get_current_user)):
             "folders": folders[:12],
             "preview": preview,
             "activity": activity,
+            "spam_blocked_7d": spam_7d,
+            "spam_total": spam_total,
         }
     finally:
         conn.close()
