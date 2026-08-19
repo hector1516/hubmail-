@@ -6,3 +6,4 @@ venv/
 .credenciales.env
 *.log
 .DS_Store
+img/
