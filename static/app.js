@@ -1757,6 +1757,7 @@ function openAccountsModal() {
   const rows = state.accounts.map(a => `
     <div class="contact-item">
       <div><span class="acc-dot" style="background:${accColor(a)}"></span><b>${esc(a.email)}</b><div class="c-email">${esc(a.display_name || "")} · ${a.is_default ? "predeterminada" : ""}</div></div>
+      ${multi && !a.is_default ? `<button class="btn-ghost btn btn-sm acc-default" data-accid="${a.id}" title="Establecer como cuenta principal">⭐ Hacer predeterminada</button>` : ""}
     </div>`).join("");
   const colorSection = multi ? `
     <div class="acc-color-section">
@@ -1783,6 +1784,19 @@ function openAccountsModal() {
   document.getElementById("acc-close").onclick = closeModal;
   document.getElementById("acc-sig").onclick = openSignatureForm;
   document.getElementById("acc-filt").onclick = openFiltersManager;
+  document.querySelectorAll(".acc-default").forEach(btn => {
+    btn.onclick = async () => {
+      const id = parseInt(btn.dataset.accid, 10);
+      try {
+        await api(`/accounts/${id}/default`, { method: "PUT" });
+        state.accounts.forEach(a => a.is_default = a.id === id);
+        renderSidebar();
+        renderContent();
+        toast("Cuenta predeterminada actualizada", "ok");
+        openAccountsModal();
+      } catch (e) { toast(e.message, "error"); }
+    };
+  });
   if (multi) {
     document.getElementById("acc-colors-save").onclick = async () => {
       const colors = {};

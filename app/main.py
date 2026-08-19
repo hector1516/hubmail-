@@ -698,6 +698,31 @@ def update_account(account_id: int, payload: AccountPayload, user=Depends(get_cu
     return _account_to_dict(updated)
 
 
+@app.put("/api/accounts/{account_id}/default")
+def set_default_account(account_id: int, user=Depends(get_current_user)):
+    acc = _get_account(user, account_id)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        if not acc["IsDefault"]:
+            cur.execute(
+                "UPDATE HUBMAIL_Accounts SET IsDefault=0 WHERE UserID=%s",
+                (user["id"],),
+            )
+            cur.execute(
+                "UPDATE HUBMAIL_Accounts SET IsDefault=1 WHERE AccountID=%s AND UserID=%s",
+                (account_id, user["id"]),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    _log_activity(
+        user, account_id, "set_default",
+        f"Estableció la cuenta {acc['EmailAddress']} como predeterminada",
+    )
+    return {"ok": True, "default_account_id": account_id}
+
+
 @app.delete("/api/accounts/{account_id}")
 def delete_account(account_id: int, user=Depends(get_current_user)):
     if not is_admin(user):
