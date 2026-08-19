@@ -1572,6 +1572,10 @@ def create_filter(payload: FilterPayload, user=Depends(get_current_user)):
         fid = cur.lastrowid
     finally:
         conn.close()
+    try:
+        filtmod.reset_filtered(scope, payload.account_id if scope == "ACCOUNT" else None)
+    except Exception:
+        pass
     _log_activity(
         user,
         payload.account_id if scope == "ACCOUNT" else None,
@@ -1612,6 +1616,10 @@ def update_filter(filter_id: int, payload: FilterPayload, user=Depends(get_curre
         conn.commit()
     finally:
         conn.close()
+    try:
+        filtmod.reset_filtered(scope, payload.account_id if scope == "ACCOUNT" else None)
+    except Exception:
+        pass
     _log_activity(
         user,
         payload.account_id if scope == "ACCOUNT" else None,
