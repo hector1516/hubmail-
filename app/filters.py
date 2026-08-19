@@ -204,6 +204,23 @@ def _db_set_spam(account_id, uid, spam=True):
         conn.close()
 
 
+def _db_mark_filtered_many(account_id, folder, uids):
+    if not uids:
+        return
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        for uid in uids:
+            cur.execute(
+                "UPDATE HUBMAIL_Messages SET FilteredAt=NOW() "
+                "WHERE AccountID=%s AND Folder=%s AND UID=%s",
+                (account_id, folder, int(uid)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _db_delete_messages(account_id, folder, uids):
     if not uids:
         return
@@ -268,10 +285,9 @@ def apply_filters(account_id, folder, uids, imap):
     account_filters = []
     for uid_user in _linked_user_ids(account_id):
         account_filters += _load_filters(uid_user, "ACCOUNT", account_id)
-    if not global_filters and not account_filters:
-        return
     rows = _load_messages(account_id, folder, uids)
     dns_checked = 0
+    processed = []
     for row in rows:
         matched = None
         for f in global_filters:
@@ -291,3 +307,35 @@ def apply_filters(account_id, folder, uids, imap):
                 dns_checked += 1
                 if check_dnsbl(ip):
                     _db_set_spam(account_id, row["UID"], True)
+        if row.get("BodyHtml") or row.get("BodyText"):
+            processed.append(row["UID"])
+    if processed:
+        _db_mark_filtered_many(account_id, folder, processed)
+
+
+def sweep_filters(account_id, imap, limit=500):
+    from collections import OrderedDict
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT Folder, UID FROM HUBMAIL_Messages "
+            "WHERE AccountID=%s AND FilteredAt IS NULL "
+            "AND (BodyHtml IS NOT NULL OR BodyText IS NOT NULL) "
+            "ORDER BY SyncedAt LIMIT %s",
+            (account_id, limit),
+        )
+        groups = OrderedDict()
+        for r in cur.fetchall():
+            groups.setdefault(r["Folder"], []).append(int(r["UID"]))
+    finally:
+        conn.close()
+    total = 0
+    for folder, uids in groups.items():
+        try:
+            apply_filters(account_id, folder, uids, imap)
+            total += len(uids)
+        except Exception as e:
+            print(f"[FILTER] sweep {account_id}/{folder}: {e}", flush=True)
+    return total

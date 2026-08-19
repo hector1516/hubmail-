@@ -8,7 +8,7 @@ from html import escape
 
 from .crypto import decrypt_secret
 from .db import get_conn
-from .filters import apply_filters, extract_sender_ip
+from .filters import apply_filters, extract_sender_ip, sweep_filters
 from .imap_client import (
     IMAPClient,
     IMAPError,
@@ -597,9 +597,9 @@ def _sync_folder_conn(account_id, folder, imap, force=False, with_bodies=True):
             except Exception as e:
                 print(f"[SYNC] error fetch body {account_id}/{folder}: {e}", flush=True)
                 _log_sync_error(account_id, folder, f"fetch body: {e}")
-        if with_bodies and new_uids:
+        if with_bodies and (new_uids or missing_body):
             try:
-                apply_filters(account_id, folder, new_uids, imap)
+                apply_filters(account_id, folder, new_uids + missing_body, imap)
             except Exception as e:
                 print(f"[SYNC] filtros {account_id}/{folder}: {e}", flush=True)
         try:
@@ -1105,6 +1105,12 @@ def sync_account(account_id):
             msg = f"retención: {e}"
             print(f"[RETENTION] error {account_id}: {e}", flush=True)
             _log_sync_error(account_id, None, msg)
+        try:
+            swept = sweep_filters(account_id, imap)
+            if swept:
+                print(f"[SYNC] filtros sweep {account_id}: {swept} mensajes", flush=True)
+        except Exception as e:
+            print(f"[FILTER] sweep error {account_id}: {e}", flush=True)
     finally:
         imap.close()
         _account_busy[account_id] = False

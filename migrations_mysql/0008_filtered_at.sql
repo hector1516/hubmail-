@@ -1,0 +1,2 @@
+ALTER TABLE HUBMAIL_Messages ADD COLUMN FilteredAt DATETIME NULL AFTER SenderIP;
+CREATE INDEX IX_HUBMAIL_Messages_Filtered ON HUBMAIL_Messages (AccountID, FilteredAt);
