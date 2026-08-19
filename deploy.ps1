@@ -3,7 +3,7 @@ param(
     [string]$ImageName = "eccsa/hubmail",
     [string]$ContainerName = "hubmail",
     [string]$DbName = "HUBMAIL",
-    [string]$DbServer = "172.26.90.159",
+    [string]$DbServer = "172.17.0.1",
     [string]$DbUser = "hubmail",
     [string]$DbPassword = "eyccazo",
     [string]$UsersDbName = "ECCSA_Admon_Pruebas",

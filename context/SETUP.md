@@ -10,7 +10,7 @@
 
 ## Entorno / Variables de entorno
 Prefijo `HUBMAIL_*` (ver `app/config.py`):
-- `HUBMAIL_DB_SERVER/_USER/_PASSWORD/_NAME` → MySQL (defaults: 172.26.90.159 / hubmail / eyccazo / HUBMAIL).
+- `HUBMAIL_DB_SERVER/_USER/_PASSWORD/_NAME` → MySQL. En el contenedor usar `172.17.0.1` (gateway del bridge de Docker; apuntar a la IP del host `172.26.90.159` falla con `2013 Lost connection` por hairpin NAT en Docker Desktop). Desde el host Windows, `172.26.90.159` funciona. Defaults: 172.17.0.1 / hubmail / eyccazo / HUBMAIL.
 - `HUBMAIL_USERS_DB_SERVER/_USER/_PASSWORD/_NAME` → SQL Server (defaults: 172.26.117.220 / sa / eyccazo / ECCSA_Admon_Pruebas).
 - `HUBMAIL_JWT_SECRET`, `HUBMAIL_JWT_EXPIRE` (480 min).
 - `HUBMAIL_MAX_ATTACH_MB` (25), `HUBMAIL_PAGE_SIZE` (25).
@@ -41,7 +41,7 @@ Qué hace `deploy.ps1`:
 > IMPORTANTE: cualquier archivo **nuevo** en `static/` o `app/` debe añadirse a la lista de `Upload-File` en `deploy.ps1`.
 
 ## Servicios dependientes
-- MySQL `172.26.90.159` (BD HUBMAIL) — requerido.
+- MySQL (BD HUBMAIL) — requerido. En el contenedor se accede vía `172.17.0.1`; desde el host `172.26.90.159`.
 - SQL Server `172.26.117.220` (HUB_Users, HUB_BingWallpapers) — requerido.
 - IMAP/SMTP GoDaddy — requerido para sync y envío.
 - Cloudflare Tunnel → `http://localhost:8502` para HTTPS público (configurado remotamente en Cloudflare Zero Trust; cloudflared corre con `--token-file` en Windows del servidor).
