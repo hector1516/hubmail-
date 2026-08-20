@@ -24,6 +24,7 @@ class Settings:
     vapid_public_key: str
     vapid_private_key: str
     vapid_subject: str
+    deepl_api_key: str
 
 
 def get_settings() -> Settings:
@@ -48,6 +49,7 @@ def get_settings() -> Settings:
         vapid_public_key=os.getenv("HUBMAIL_VAPID_PUBLIC", "BMutVGBRlPlW5LUEe2SW0MPKbikLMP95Oya1JLGtcsv9gSrABaZDYtejHhJXo1TOdzJD1e0Bdj3wt5SPjUaK6fQ"),
         vapid_private_key=os.getenv("HUBMAIL_VAPID_PRIVATE", "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgC55h9YhmoWFKQrj8k2PEOXwK7JGEn96YrNVCgu34T2OhRANCAATLrVRgUZT5VuS1BHtkltDDym4pCzD_eTsmtSSxrXLL_YEqwAWmQ2LXox4SV6NUzncyQ9XtAXY98LeUj41Giun0"),
         vapid_subject=os.getenv("HUBMAIL_VAPID_SUBJECT", "mailto:it@ecc-sa.com.mx"),
+        deepl_api_key=os.getenv("HUBMAIL_DEEPL_KEY", ""),
     )
 
 

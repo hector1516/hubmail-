@@ -28,6 +28,7 @@ from .smtp_client import send_mail, SMTPError
 from .signature import build_default_signature
 from . import sync as syncmod
 from . import filters as filtmod
+from . import translate as transmod
 
 app = FastAPI(title="HUBMail", version="0.1.0")
 
@@ -246,6 +247,11 @@ class ContactPayload(BaseModel):
     email: str
     phone: str = ""
     notes: str = ""
+
+
+class TranslatePayload(BaseModel):
+    text: str = ""
+    html: bool = False
 
 
 # ---------------------------------------------------------------- helpers
@@ -1458,6 +1464,53 @@ def send_message(account_id: int, payload: SendPayload, user=Depends(get_current
     _log_activity(user, acc["AccountID"], "send",
                   f"Envió correo a {', '.join(payload.to) or '(sin destinatario)'}: {payload.subject or '(sin asunto)'}")
     return {"ok": True, "queued_sent": True}
+
+
+@app.post("/api/translate")
+def translate_text(payload: TranslatePayload, user=Depends(get_current_user)):
+    if not transmod.is_configured():
+        raise HTTPException(503, "Traducción no disponible por el momento.")
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "No hay texto para traducir")
+    chars = transmod.estimate_chars(text, payload.html)
+    try:
+        ok, remaining = transmod.check_quota(chars)
+    except Exception:
+        ok, remaining = True, None
+    if not ok:
+        transmod.quota_exhausted()
+        raise HTTPException(
+            429, "Saldo de traducción agotado. La traducción no está disponible por el momento."
+        )
+    try:
+        if payload.html:
+            translated, _ = transmod.translate_html(text)
+        else:
+            translated = transmod.translate([text])[0]
+    except transmod.DeepLError as e:
+        if e.quota:
+            transmod.quota_exhausted()
+            raise HTTPException(
+                429, "Saldo de traducción agotado. La traducción no está disponible por el momento."
+            )
+        raise HTTPException(e.status or 503, str(e))
+    if not translated:
+        raise HTTPException(502, "El servicio de traducción no devolvió contenido")
+    transmod.record_usage(chars)
+    return {
+        "translated": translated,
+        "html": payload.html,
+        "chars": chars,
+        "remaining": max(0, remaining - chars) if remaining is not None else None,
+    }
+
+
+@app.get("/api/translate/balance")
+def translate_balance(user=Depends(get_current_user)):
+    if not transmod.is_configured():
+        raise HTTPException(503, "Traducción no disponible por el momento.")
+    return transmod.balance()
 
 
 def _upsert_sent_recipients(user, payload):

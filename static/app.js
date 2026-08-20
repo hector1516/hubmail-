@@ -1535,14 +1535,14 @@ function detailHtml(m) {
     bodyHtml = bodyHtml.replace(new RegExp("cid:" + a.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), `data:${a.content_type};base64,${a.data}`);
   });
   bodyHtml = proxyImages(bodyHtml);
-  const fId = "bf-" + Math.random().toString(36).slice(2, 8);
-  const autoH = `<script>(function(){var w=-1;function r(){var h=document.documentElement.scrollHeight||document.body.scrollHeight;if(h!==w){w=h;parent.postMessage({hmh:h,hid:"${fId}"},"*")}}if(window.addEventListener){window.addEventListener("load",function(){setTimeout(r,40)});window.addEventListener("resize",r);window.addEventListener("message",function(e){var d=e.data;if(d&&d.hid==="${fId}"&&d.zoom){document.documentElement.style.zoom=d.zoom;setTimeout(r,100)}})}setTimeout(r,150)})()<\/script>`;
+  m._bodyRendered = bodyHtml || m.body_text || "";
 
   return `
     <div class="detail-toolbar">
       <button class="btn-ghost btn btn-sm" id="d-back" title="Volver">←</button>
       <button class="btn-ghost btn btn-sm" id="d-reply" title="Responder">↩<span class="btn-label">Responder</span></button>
       <button class="btn-ghost btn btn-sm" id="d-fwd" title="Reenviar">↪<span class="btn-label">Reenviar</span></button>
+      <button class="btn-ghost btn btn-sm" id="d-translate" title="Traducir a español">🌐<span class="btn-label">Traducir</span></button>
       <button class="btn-ghost btn btn-sm" id="d-flag" title="Marcar/desmarcar">${m.flagged ? "★" : "☆"}</button>
       <button class="btn-ghost btn btn-sm" id="d-unread" title="Marcar como no leído">◌<span class="btn-label">No leído</span></button>
       <button class="btn-ghost btn btn-sm" id="d-print" title="Imprimir">🖨<span class="btn-label">Imprimir</span></button>
@@ -1568,8 +1568,58 @@ function detailHtml(m) {
         </div>
       </div>
       ${atts}
-      <iframe class="body-frame" data-hid="${fId}" sandbox="allow-scripts" referrerpolicy="no-referrer" srcdoc="${esc(bodyHtml + autoH || "")}"></iframe>
+      ${bodyFrameHtml(m)}
     </div>`;
+}
+
+function bodyFrameHtml(m) {
+  const fId = "bf-" + Math.random().toString(36).slice(2, 8);
+  const autoH = `<script>(function(){var w=-1;function r(){var h=document.documentElement.scrollHeight||document.body.scrollHeight;if(h!==w){w=h;parent.postMessage({hmh:h,hid:"${fId}"},"*")}}if(window.addEventListener){window.addEventListener("load",function(){setTimeout(r,40)});window.addEventListener("resize",r);window.addEventListener("message",function(e){var d=e.data;if(d&&d.hid==="${fId}"&&d.zoom){document.documentElement.style.zoom=d.zoom;setTimeout(r,100)}})}setTimeout(r,150)})()<\/script>`;
+  const html = (m._translated ? m._translatedHtml : m._bodyRendered) || "";
+  return `<iframe class="body-frame" data-hid="${fId}" sandbox="allow-scripts" referrerpolicy="no-referrer" srcdoc="${esc(html + autoH)}"></iframe>`;
+}
+
+function normalizeText(s) {
+  return String(s || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function toggleTranslate(m) {
+  const btn = document.getElementById("d-translate");
+  if (m._translated) {
+    m._translated = false;
+    const frame = document.querySelector(".body-frame");
+    if (frame) frame.outerHTML = bodyFrameHtml(m);
+    if (btn) btn.innerHTML = "🌐<span class=\"btn-label\">Traducir</span>";
+    return;
+  }
+  if (!btn) return;
+  const html = m._bodyRendered || m.body_html || m.body_text || "";
+  if (!html.trim()) return toast("Este mensaje no tiene contenido para traducir", "error");
+  btn.disabled = true;
+  btn.innerHTML = "…";
+  try {
+    const res = await api("/translate", {
+      method: "POST",
+      body: JSON.stringify({ text: html, html: true }),
+    });
+    if (normalizeText(res.translated) === normalizeText(html)) {
+      toast("El mensaje ya está en español", "ok");
+    } else {
+      m._translatedHtml = res.translated;
+      m._translated = true;
+      const frame = document.querySelector(".body-frame");
+      if (frame) frame.outerHTML = bodyFrameHtml(m);
+      if (btn) btn.innerHTML = "🌐<span class=\"btn-label\">Ver original</span>";
+      if (res.remaining !== undefined && res.remaining !== null && res.remaining < 10000) {
+        toast("Quedan pocos caracteres de traducción: " + res.remaining, "");
+      }
+    }
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    btn.disabled = false;
+    if (!m._translated) btn.innerHTML = "🌐<span class=\"btn-label\">Traducir</span>";
+  }
 }
 
 function renderDetail(m) {
@@ -1616,12 +1666,12 @@ function bindDetailActions(m) {
   const ctx = msgCtx(m);
   const isModal = !!modalRoot.querySelector(".modal");
   const dp = document.getElementById("detail-pane");
-  const frame = document.querySelector(".body-frame");
   let zoom = 1;
   const setZoom = z => {
     zoom = Math.min(2, Math.max(0.4, z));
     const val = document.getElementById("d-zoom-val");
     if (val) val.textContent = Math.round(zoom * 100) + "%";
+    const frame = document.querySelector(".body-frame");
     if (frame && frame.contentWindow) frame.contentWindow.postMessage({ hid: frame.dataset.hid, zoom }, "*");
   };
   const zo = document.getElementById("d-zoomout");
@@ -1668,6 +1718,8 @@ function bindDetailActions(m) {
   document.getElementById("d-fwd").onclick = () => {
     openCompose({ subject: m.subject.startsWith("Fwd:") ? m.subject : "Fwd: " + m.subject });
   };
+  const dtr = document.getElementById("d-translate");
+  if (dtr) dtr.onclick = () => toggleTranslate(m);
   document.getElementById("d-print").onclick = () => printMessage(m);
   const df = document.getElementById("d-filter");
   if (df) df.onclick = () => {
@@ -1833,6 +1885,7 @@ function openCompose(prefill = {}) {
     <div id="compose-body" contenteditable="true" spellcheck="true" lang="es-MX" data-placeholder="Escribe tu mensaje..."></div>
     <div class="actions">
       <button class="btn-ghost btn" id="c-contacts">👥 Contactos</button>
+      <button class="btn-ghost btn" id="c-translate">🌐 Traducir</button>
       <span class="spacer"></span>
       <button class="btn-ghost btn" id="c-cancel">Cancelar</button>
       <button class="btn-primary btn" id="c-send">Enviar</button>
@@ -1859,6 +1912,7 @@ function openCompose(prefill = {}) {
     });
   };
   document.getElementById("c-contacts").onclick = () => openContactsManager(true);
+  document.getElementById("c-translate").onclick = () => translateCompose();
   insertSignature();
   initRecipientAutocomplete(document.getElementById("c-to"));
   initRecipientAutocomplete(document.getElementById("c-cc"));
@@ -1888,6 +1942,38 @@ function bodyHtmlToSend() {
     b.remove();
   });
   return clone.innerHTML;
+}
+
+async function translateCompose() {
+  const body = document.getElementById("compose-body");
+  if (!body) return;
+  const clone = body.cloneNode(true);
+  let sig = null;
+  clone.querySelectorAll(".hub-sig").forEach(s => { sig = s; s.remove(); });
+  const html = clone.innerHTML.trim();
+  if (!html) return toast("No hay contenido para traducir", "error");
+  const btn = document.getElementById("c-translate");
+  const oldLabel = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = "Traduciendo…";
+  try {
+    const res = await api("/translate", {
+      method: "POST",
+      body: JSON.stringify({ text: html, html: true }),
+    });
+    if (normalizeText(res.translated) === normalizeText(html)) {
+      toast("El mensaje ya está en español", "ok");
+    } else {
+      body.innerHTML = res.translated;
+      if (sig) body.appendChild(sig);
+      toast("Mensaje traducido", "ok");
+    }
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = oldLabel;
+  }
 }
 
 function renderAttachList() {

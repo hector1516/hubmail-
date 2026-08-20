@@ -15,6 +15,7 @@ services:
       HUBMAIL_USERS_DB_PASSWORD: ${HUBMAIL_USERS_DB_PASSWORD:-eyccazo}
       HUBMAIL_USERS_DB_NAME: ${HUBMAIL_USERS_DB_NAME:-ECCSA_Admon_Pruebas}
       HUBMAIL_JWT_SECRET: ${HUBMAIL_JWT_SECRET:-cambia-este-secreto-hubmail}
+      HUBMAIL_DEEPL_KEY: ${HUBMAIL_DEEPL_KEY:-}
     volumes:
       - hubmail_data:/data
 

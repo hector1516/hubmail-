@@ -7,7 +7,8 @@ param(
     [string]$DbUser = "hubmail",
     [string]$DbPassword = "eyccazo",
     [string]$UsersDbName = "ECCSA_Admon_Pruebas",
-    [string]$UsersDbServer = "172.26.117.220"
+    [string]$UsersDbServer = "172.26.117.220",
+    [string]$DeeplKey = "4588b06b-6615-455a-ab62-2062d7bf6119:fx"
 )
 
 $plink = "C:\Program Files\HeidiSQL\plink.exe"
@@ -50,6 +51,7 @@ Upload-File "$localRoot\app\db.py" "$RemoteDir\app\db.py"
 Upload-File "$localRoot\app\filters.py" "$RemoteDir\app\filters.py"
 Upload-File "$localRoot\app\signature.py" "$RemoteDir\app\signature.py"
 Upload-File "$localRoot\app\push.py" "$RemoteDir\app\push.py"
+Upload-File "$localRoot\app\translate.py" "$RemoteDir\app\translate.py"
 Upload-File "$localRoot\static\index.html" "$RemoteDir\static\index.html"
 Upload-File "$localRoot\static\app.js" "$RemoteDir\static\app.js"
 Upload-File "$localRoot\static\style.css" "$RemoteDir\static\style.css"
@@ -65,6 +67,9 @@ Upload-File "$localRoot\migrations_mysql\0003_account_colors.sql" "$RemoteDir\mi
 Upload-File "$localRoot\migrations_mysql\0004_pending_ops.sql" "$RemoteDir\migrations_mysql\0004_pending_ops.sql"
 Upload-File "$localRoot\migrations_mysql\0005_pending_raw.sql" "$RemoteDir\migrations_mysql\0005_pending_raw.sql"
 Upload-File "$localRoot\migrations_mysql\0006_push_subscriptions.sql" "$RemoteDir\migrations_mysql\0006_push_subscriptions.sql"
+Upload-File "$localRoot\migrations_mysql\0007_sync_errors.sql" "$RemoteDir\migrations_mysql\0007_sync_errors.sql"
+Upload-File "$localRoot\migrations_mysql\0008_filtered_at.sql" "$RemoteDir\migrations_mysql\0008_filtered_at.sql"
+Upload-File "$localRoot\migrations_mysql\0009_translation_stats.sql" "$RemoteDir\migrations_mysql\0009_translation_stats.sql"
 Upload-File "$localRoot\requirements.txt" "$RemoteDir\requirements.txt"
 Upload-File "$localRoot\Dockerfile" "$RemoteDir\Dockerfile"
 Upload-File "$localRoot\apply_migrations.py" "$RemoteDir\apply_migrations.py"
@@ -76,7 +81,7 @@ Write-Host "==> 4/6 Deteniendo contenedor anterior (si existe)"
 Invoke-Remote "docker rm -f $ContainerName"
 
 Write-Host "==> 5/6 Arrancando contenedor"
-Invoke-Remote "docker run -d --name $ContainerName --restart unless-stopped -p 8502:8502 -v hubmail_data:/data -e HUBMAIL_DB_NAME=$DbName -e HUBMAIL_DB_SERVER=$DbServer -e HUBMAIL_DB_USER=$DbUser -e HUBMAIL_DB_PASSWORD=$DbPassword -e HUBMAIL_USERS_DB_NAME=$UsersDbName -e HUBMAIL_USERS_DB_SERVER=$UsersDbServer ${ImageName}:latest"
+Invoke-Remote "docker run -d --name $ContainerName --restart unless-stopped -p 8502:8502 -v hubmail_data:/data -e HUBMAIL_DB_NAME=$DbName -e HUBMAIL_DB_SERVER=$DbServer -e HUBMAIL_DB_USER=$DbUser -e HUBMAIL_DB_PASSWORD=$DbPassword -e HUBMAIL_USERS_DB_NAME=$UsersDbName -e HUBMAIL_USERS_DB_SERVER=$UsersDbServer -e HUBMAIL_DEEPL_KEY=$DeeplKey ${ImageName}:latest"
 
 Write-Host "==> 6/6 Logs iniciales"
 Invoke-Remote "docker logs --tail 30 $ContainerName"
