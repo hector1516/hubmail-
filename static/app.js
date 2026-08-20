@@ -16,6 +16,9 @@ const state = {
   q: "",
   unreadOnly: false,
   currentMsgId: null,
+  currentMsg: null,
+  unified: false,
+  theme: localStorage.getItem("hubmail_theme") || "light",
   composeAttachments: [],
   selected: new Set(),
   notified: new Set(),
@@ -61,6 +64,152 @@ function savePaneWidths() {
   try {
     localStorage.setItem(key, JSON.stringify(state.paneWidths));
   } catch (e) {}
+}
+
+/* ============================================================ tema */
+function applyTheme(t) {
+  state.theme = t === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = state.theme;
+  try { localStorage.setItem("hubmail_theme", state.theme); } catch (e) {}
+  const btn = document.getElementById("btn-theme");
+  if (btn) btn.textContent = state.theme === "dark" ? "☀️" : "🌙";
+  const da = document.getElementById("da-theme");
+  if (da) da.innerHTML = state.theme === "dark" ? "☀️ Tema claro" : "🌙 Tema oscuro";
+}
+
+function toggleTheme() {
+  applyTheme(state.theme === "dark" ? "light" : "dark");
+}
+
+/* ============================================================ helpers UI */
+function avatarFor(name, email) {
+  const s = String(name || email || "?").trim();
+  const letter = (s[0] || "?").toUpperCase();
+  let h = 7;
+  const e = String(email || name || "x");
+  for (let i = 0; i < e.length; i++) h = (h * 31 + e.charCodeAt(i)) >>> 0;
+  const pal = ["#2a6fd6", "#8e44ad", "#d63031", "#0984e3", "#00b894", "#e17055", "#e84393", "#6c5ce7", "#00cec9", "#e67e22"];
+  return `<span class="avatar" style="background:${pal[h % pal.length]}">${esc(letter)}</span>`;
+}
+
+function cardDate(d) {
+  if (!d) return "";
+  const dt = new Date(String(d).replace(" ", "T"));
+  if (isNaN(dt)) return d;
+  const now = new Date();
+  if (dt.toDateString() === now.toDateString()) {
+    return dt.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+  }
+  return dt.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "2-digit" });
+}
+
+function msgCtx(m) {
+  if (!m) return { accountId: state.currentAccountId, folder: state.currentFolder };
+  return { accountId: m.account_id || state.currentAccountId, folder: m.folder || state.currentFolder };
+}
+
+function openDrawer() {
+  const d = document.getElementById("drawer");
+  if (d) d.classList.add("open");
+  const o = document.getElementById("drawer-overlay");
+  if (o) o.classList.add("show");
+}
+
+function closeDrawer() {
+  const d = document.getElementById("drawer");
+  if (d) d.classList.remove("open");
+  const o = document.getElementById("drawer-overlay");
+  if (o) o.classList.remove("show");
+}
+
+function focusSearch() {
+  const el = document.getElementById("search-box");
+  if (el) { el.focus(); el.scrollIntoView({ block: "center", behavior: "smooth" }); }
+}
+
+/* ============================================================ swipe */
+function attachSwipe(el, onDelete, onToggleRead) {
+  const inner = el.querySelector(".msg-card-inner");
+  const sb = el.querySelector(".swipe-bg");
+  const LIMIT = 84;
+  let startX = 0, startY = 0, dx = 0, active = false, horiz = false;
+  const setDx = v => {
+    dx = v;
+    if (inner) inner.style.transform = `translateX(${v}px)`;
+    if (sb) sb.style.opacity = Math.min(1, Math.abs(v) / 60);
+  };
+  const reset = () => {
+    setDx(0);
+    if (sb) { sb.classList.remove("show-del", "show-read"); sb.style.opacity = ""; }
+  };
+  el.addEventListener("touchstart", e => {
+    if (e.touches.length !== 1) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    active = true;
+    horiz = false;
+    if (inner) inner.style.transition = "none";
+  }, { passive: true });
+  el.addEventListener("touchmove", e => {
+    if (!active) return;
+    const cx = e.touches[0].clientX;
+    const cy = e.touches[0].clientY;
+    const del = cx - startX;
+    const dely = cy - startY;
+    if (!horiz) {
+      if (Math.abs(del) < 8 && Math.abs(dely) < 8) return;
+      horiz = Math.abs(del) > Math.abs(dely);
+      if (!horiz) return;
+    }
+    e.preventDefault();
+    const v = Math.max(-LIMIT, Math.min(LIMIT, del));
+    setDx(v);
+    if (sb) {
+      sb.classList.toggle("show-del", v < -30);
+      sb.classList.toggle("show-read", v > 30);
+    }
+  }, { passive: false });
+  const end = () => {
+    if (!active) return;
+    active = false;
+    if (inner) inner.style.transition = "";
+    if (dx < -60) {
+      setDx(-140);
+      el._swiped = true;
+      setTimeout(() => { onDelete && onDelete(); }, 140);
+    } else if (dx > 60) {
+      setDx(140);
+      el._swiped = true;
+      setTimeout(() => { onToggleRead && onToggleRead(); }, 140);
+    } else {
+      reset();
+    }
+  };
+  el.addEventListener("touchend", end);
+  el.addEventListener("touchcancel", end);
+}
+
+async function quickCardAction(el, action) {
+  const id = el.dataset.id;
+  const accId = parseInt(el.dataset.acc, 10) || state.currentAccountId;
+  const folder = el.dataset.folder || state.currentFolder;
+  try {
+    if (action === "delete") {
+      await api(`/accounts/${accId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(folder)}&action=delete`, { method: "PATCH" });
+      toast("Mensaje eliminado", "ok");
+    } else {
+      const msg = state.messages.find(x => x.id === id);
+      const cur = msg ? msg.unread : true;
+      await api(`/accounts/${accId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(folder)}&action=${cur ? "read" : "unread"}`, { method: "PATCH" });
+      if (msg) msg.unread = !cur;
+      toast(cur ? "Marcado como leído" : "Marcado como no leído", "ok");
+    }
+    el.remove();
+    loadUnreadCounts().catch(() => {});
+    loadActivity();
+  } catch (e) {
+    toast(e.message, "error");
+  }
 }
 
 function initGutter(gutterId, targetId, which) {
@@ -531,6 +680,7 @@ async function boot() {
     state.folderDelimiter = fa.delimiter;
     state.expandedFolders = state.expandedByAccount[def.id] || {};
     state.currentFolder = "INBOX";
+    state.unified = true;
     await loadMessages();
     renderShell();
     startNotifications();
@@ -599,6 +749,12 @@ function updateUnreadBadges() {
     el.textContent = n ? (n > 999 ? "999+" : n) : "";
     el.style.display = n ? "" : "none";
   });
+  const ub = document.getElementById("unified-badge");
+  if (ub) {
+    const n = state.accounts.reduce((a, acc) => a + ((state.unreadByAccount[acc.id] || {}).total || 0), 0);
+    ub.textContent = n ? (n > 999 ? "999+" : n) : "";
+    ub.style.display = n ? "" : "none";
+  }
 }
 
 async function loadFolders() {
@@ -628,12 +784,17 @@ function autoExpand(folders, delimiter) {
 }
 
 async function loadMessages() {
-  if (!state.currentAccountId) return;
   showLoading("Cargando correos…");
   try {
     state.selected.clear();
-    const qs = `?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`;
-    const data = await api(`/accounts/${state.currentAccountId}/messages${qs}`);
+    let data;
+    if (state.unified) {
+      data = await api(`/unified?page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`);
+    } else {
+      if (!state.currentAccountId) return;
+      const qs = `?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`;
+      data = await api(`/accounts/${state.currentAccountId}/messages${qs}`);
+    }
     state.messages = data.messages;
     state.total = data.total;
     state.lastSync = data.last_sync || null;
@@ -648,16 +809,31 @@ function messagesHtml() {
     const from = m.from[0];
     const sender = from ? (from.name || from.email) : "?";
     const sel = state.selected.has(m.id);
+    const ctx = msgCtx(m);
+    const accTag = state.unified
+      ? `<span class="acc-tag" style="--acc-color:${accColor({ id: m.account_id })}">${esc(m.account_email || m.account_display || "")}</span>`
+      : "";
+    const icons =
+      (m.has_attachments ? '<span class="mc-ico">📎</span>' : "") +
+      (m.flagged ? '<span class="mc-ico star">★</span>' : "") +
+      (m.spam ? '<span class="spam-badge">SPAM</span>' : "");
     return `
-      <div class="msg-item ${m.unread ? "unread" : ""} ${sel ? "selected" : ""}" data-id="${esc(m.id)}" draggable="true">
-        <input type="checkbox" class="msg-check" data-id="${esc(m.id)}" ${sel ? "checked" : ""}>
-        <button class="msg-unread-btn" title="Marcar como no leído">◌</button>
-        <div class="msg-main">
-          <div class="row1">
-            <div class="from">${m.spam ? '<span class="spam-badge">SPAM</span> ' : ""}${esc(sender)}</div>
-            <div class="date">${esc(m.date)}</div>
+      <div class="msg-card ${m.unread ? "unread" : ""} ${sel ? "selected" : ""}" data-id="${esc(m.id)}" data-acc="${ctx.accountId}" data-folder="${esc(ctx.folder)}" draggable="true">
+        <div class="swipe-bg">
+          <div class="sb sb-del">🗑</div>
+          <div class="sb sb-read">${m.unread ? "✓" : "◌"}</div>
+        </div>
+        <div class="msg-card-inner">
+          ${state.unified ? "" : `<input type="checkbox" class="msg-check" data-id="${esc(m.id)}" ${sel ? "checked" : ""}>`}
+          ${avatarFor(sender, from && from.email)}
+          <div class="mc-body">
+            <div class="mc-row1">
+              <span class="mc-from">${esc(sender)}</span>
+              <span class="mc-date">${esc(cardDate(m.date))}</span>
+            </div>
+            <div class="mc-subject">${esc(m.subject)}</div>
+            <div class="mc-row2">${accTag}${icons}</div>
           </div>
-          <div class="subject">${m.flagged ? "★ " : ""}${esc(m.subject)}</div>
         </div>
       </div>`;
   }).join("");
@@ -672,9 +848,10 @@ function pagerHtml() {
 }
 
 function bindMessageList() {
-  document.querySelectorAll("#message-list .msg-item").forEach(el => {
+  document.querySelectorAll("#message-list .msg-card").forEach(el => {
     const id = el.dataset.id;
     el.onclick = () => {
+      if (el._swiped) { el._swiped = false; return; }
       clearTimeout(el._t);
       el._t = setTimeout(() => openMessage(id), 220);
     };
@@ -685,7 +862,9 @@ function bindMessageList() {
       openMessageModal(id);
     };
     el.addEventListener("dragstart", e => {
-      dragData = { accountId: state.currentAccountId, folder: state.currentFolder, uid: id };
+      const m0 = state.messages.find(x => x.id === id) || null;
+      const ctx = msgCtx(m0);
+      dragData = { accountId: ctx.accountId, folder: ctx.folder, uid: id };
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", id);
       el.classList.add("dragging");
@@ -694,12 +873,7 @@ function bindMessageList() {
       el.classList.remove("dragging");
       dragData = null;
     });
-    const unreadBtn = el.querySelector(".msg-unread-btn");
-    if (unreadBtn) unreadBtn.onclick = (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      setMessageSeen(el.dataset.id, false);
-    };
+    attachSwipe(el, () => quickCardAction(el, "delete"), () => quickCardAction(el, "toggle"));
   });
   document.querySelectorAll(".msg-check").forEach(cb => {
     cb.onclick = (e) => {
@@ -707,7 +881,7 @@ function bindMessageList() {
       const id = cb.dataset.id;
       if (cb.checked) state.selected.add(id);
       else state.selected.delete(id);
-      cb.closest(".msg-item").classList.toggle("selected", cb.checked);
+      cb.closest(".msg-card").classList.toggle("selected", cb.checked);
       updateBulkBar();
       syncSelectAll();
     };
@@ -725,10 +899,16 @@ let refreshTimer = null;
 let refreshing = false;
 
 function silentRefresh() {
-  if (refreshing || document.hidden || !state.currentAccountId || !state.currentFolder) return;
+  if (refreshing || document.hidden) return;
   if (modalRoot.querySelector(".modal")) return;
   refreshing = true;
-  api(`/accounts/${state.currentAccountId}/messages?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`)
+  const url = state.unified
+    ? `/unified?page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`
+    : (state.currentAccountId && state.currentFolder
+        ? `/accounts/${state.currentAccountId}/messages?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`
+        : null);
+  if (!url) { refreshing = false; return; }
+  api(url)
     .then(data => {
       state.messages = data.messages;
       state.total = data.total;
@@ -766,26 +946,50 @@ window.addEventListener("message", e => {
 });
 
 function renderShell() {
+  const uname = state.user ? (state.user.name || state.user.email || "?") : "?";
   app.innerHTML = `
     <div class="shell">
-      <header>
+      <header class="appbar">
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
-        <div class="brand"><img src="/engrane.png" class="brand-logo" alt="ECCSA Automation">HUBMail<span class="top-user" id="btn-welcome" title="Ver mi resumen">${esc(state.user?.name || state.user?.email || "")}</span></div>
-        <div class="header-account" id="header-account"></div>
+        <div class="brand appbar-brand"><img src="/engrane.png" class="brand-logo" alt="HUBMail"><span class="appbar-title" id="appbar-title">Bandeja</span></div>
         <div class="header-right">
-          ${state.user && state.user.is_admin ? '<button class="icon-btn" id="btn-syncstatus" title="Estado de sincronización">📊</button><button class="icon-btn" id="btn-errors" title="Errores de sincronización">⚠️</button><button class="icon-btn" id="btn-activity" title="Log de actividad">📋</button>' : ""}
+          <button class="icon-btn" id="btn-search" title="Buscar">🔍</button>
           <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
-          <button class="icon-btn btn-primary" id="btn-compose">✉️ <span class="btn-label">Redactar</span></button>
-          <button class="icon-btn" id="btn-accounts" title="Cuentas y firma">⚙️</button>
-          <button class="icon-btn" id="btn-logout" title="Salir">⏻</button>
+          <button class="icon-btn" id="btn-theme" title="Cambiar tema">${state.theme === "dark" ? "☀️" : "🌙"}</button>
+          <button class="icon-btn" id="btn-accounts" title="Cuentas y ajustes">⚙️</button>
         </div>
       </header>
-      <div class="body">
-        <aside id="sidebar" style="width:${state.paneWidths.sidebar}px"></aside>
-        <div class="sidebar-overlay" id="sidebar-overlay"></div>
-        <div class="gutter" id="gutter-side" title="Arrastrar para ajustar"></div>
+
+      <div class="app-body">
+        <div class="drawer-overlay" id="drawer-overlay"></div>
+        <aside class="drawer" id="drawer">
+          <div class="drawer-head">
+            ${avatarFor(state.user && state.user.name, state.user && state.user.email)}
+            <div class="drawer-user">
+              <div class="drawer-name" id="btn-welcome" title="Ver mi resumen">${esc(uname)}</div>
+              <div class="drawer-email">${esc(state.user && state.user.email || "")}</div>
+            </div>
+            <button class="icon-btn" id="drawer-close" title="Cerrar">✕</button>
+          </div>
+          <div class="drawer-actions">
+            <button class="drawer-action" id="da-unified">📥 Bandeja unificada<span class="acc-unread" id="unified-badge"></span></button>
+            <button class="drawer-action" id="da-compose">✉️ Redactar</button>
+            <button class="drawer-action" id="da-contacts">👥 Contactos</button>
+            <button class="drawer-action" id="da-accounts">⚙️ Cuentas y firma</button>
+            <button class="drawer-action" id="da-filters">📁 Filtros</button>
+            ${state.user && state.user.is_admin ? `
+              <button class="drawer-action" id="da-sync">📊 Estado de sincronización</button>
+              <button class="drawer-action" id="da-errors">⚠️ Errores de sincronización</button>
+              <button class="drawer-action" id="da-activity">📋 Log de actividad</button>` : ""}
+            <button class="drawer-action" id="da-theme">${state.theme === "dark" ? "☀️ Tema claro" : "🌙 Tema oscuro"}</button>
+            <button class="drawer-action" id="da-logout">⏻ Cerrar sesión</button>
+          </div>
+          <div class="sec-title">Mis cuentas</div>
+          <div class="drawer-accounts" id="drawer-accounts"></div>
+        </aside>
         <main id="content"></main>
       </div>
+
       <div class="activity-bar hidden" id="activity-bar">
         <div class="activity-bar-head">
           <button class="icon-btn btn-sm" id="activity-toggle" title="Mostrar/ocultar log">📋</button>
@@ -794,35 +998,72 @@ function renderShell() {
         </div>
         <div class="activity-list">Cargando…</div>
       </div>
+
+      <nav class="bottom-nav">
+        <button class="bn-item" data-go="inbox"><span class="bn-ico">📥</span><span class="bn-label">Bandeja</span></button>
+        <button class="bn-item" data-go="contacts"><span class="bn-ico">👥</span><span class="bn-label">Contactos</span></button>
+        <button class="bn-item" data-go="search"><span class="bn-ico">🔍</span><span class="bn-label">Buscar</span></button>
+        <button class="bn-item" data-go="accounts"><span class="bn-ico">⚙️</span><span class="bn-label">Ajustes</span></button>
+      </nav>
+
+      <button class="fab" id="fab" title="Redactar">✏️</button>
     </div>`;
 
-  document.getElementById("btn-menu").onclick = () => document.getElementById("sidebar").classList.toggle("open");
-  document.getElementById("sidebar-overlay").onclick = () => document.getElementById("sidebar").classList.remove("open");
-  document.getElementById("btn-compose").onclick = () => openCompose();
+  const goUnified = () => {
+    state.unified = true;
+    state.currentFolder = "INBOX";
+    state.page = 1;
+    state.q = "";
+    state.unreadOnly = false;
+    closeDrawer();
+    loadMessages().then(() => { renderSidebar(); renderContent(); }).catch(e => toast(e.message, "error"));
+  };
+
+  document.getElementById("btn-menu").onclick = openDrawer;
+  document.getElementById("drawer-overlay").onclick = closeDrawer;
+  document.getElementById("drawer-close").onclick = closeDrawer;
+  document.getElementById("fab").onclick = openCompose;
+  document.getElementById("btn-search").onclick = focusSearch;
   document.getElementById("btn-accounts").onclick = () => openAccountsModal();
-  document.getElementById("btn-logout").onclick = logout;
-  const btnActivity = document.getElementById("btn-activity");
-  if (btnActivity) btnActivity.onclick = () => openAdminActivity();
-  const btnSyncStatus = document.getElementById("btn-syncstatus");
-  if (btnSyncStatus) btnSyncStatus.onclick = () => openAdminSyncStatus();
-  const btnErrors = document.getElementById("btn-errors");
-  if (btnErrors) btnErrors.onclick = () => openAdminErrors();
-  document.getElementById("btn-welcome").onclick = () => openWelcome();
+  document.getElementById("btn-theme").onclick = toggleTheme;
+  document.getElementById("da-unified").onclick = goUnified;
+  document.getElementById("da-compose").onclick = () => { closeDrawer(); openCompose(); };
+  document.getElementById("da-contacts").onclick = () => { closeDrawer(); openContactsManager(); };
+  document.getElementById("da-accounts").onclick = () => { closeDrawer(); openAccountsModal(); };
+  document.getElementById("da-filters").onclick = () => { closeDrawer(); openFiltersManager(); };
+  document.getElementById("da-theme").onclick = () => { toggleTheme(); };
+  document.getElementById("da-logout").onclick = logout;
+  document.getElementById("btn-welcome").onclick = () => { closeDrawer(); openWelcome(); };
   document.getElementById("btn-notif").onclick = () => {
     state.unreadOnly = !state.unreadOnly;
     state.page = 1;
     loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
   };
-  initGutter("gutter-side", "sidebar", "sidebar");
+  const btnActivity = document.getElementById("da-activity");
+  if (btnActivity) btnActivity.onclick = () => { closeDrawer(); openAdminActivity(); };
+  const btnSyncStatus = document.getElementById("da-sync");
+  if (btnSyncStatus) btnSyncStatus.onclick = () => { closeDrawer(); openAdminSyncStatus(); };
+  const btnErrors = document.getElementById("da-errors");
+  if (btnErrors) btnErrors.onclick = () => { closeDrawer(); openAdminErrors(); };
+  document.querySelectorAll(".bottom-nav .bn-item").forEach(btn => {
+    btn.onclick = () => {
+      const go = btn.dataset.go;
+      if (go === "inbox") goUnified();
+      else if (go === "contacts") openContactsManager();
+      else if (go === "search") focusSearch();
+      else if (go === "accounts") openAccountsModal();
+    };
+  });
   renderSidebar();
   renderContent();
+  applyTheme(state.theme);
   document.getElementById("activity-toggle").onclick = () => {
     const bar = document.getElementById("activity-bar");
     bar.classList.toggle("collapsed");
-    bar.querySelector(".activity-list").style.display = bar.classList.contains("collapsed") ? "none" : "";
+    const list = bar.querySelector(".activity-list");
+    if (list) list.style.display = bar.classList.contains("collapsed") ? "none" : "";
   };
   loadActivity();
-  if (window.innerWidth <= 900) document.getElementById("sidebar").classList.add("open");
 }
 
 function buildFolderTree(folders, delimiter) {
@@ -871,7 +1112,7 @@ function renderFolderTree(node, depth, expanded, accId, unreadMap) {
 }
 
 function renderSidebar() {
-  const sb = document.getElementById("sidebar");
+  const wrap = document.getElementById("drawer-accounts");
   const list = state.accounts.map(acc => {
     const fa = state.foldersByAccount[acc.id] || { folders: [], delimiter: "/" };
     const expanded = state.expandedByAccount[acc.id] || {};
@@ -881,7 +1122,7 @@ function renderSidebar() {
     (unreadData.folders || []).forEach(f => { unreadMap[f.folder] = f.count; });
     const totalUnread = unreadData.total || 0;
     const tree = collapsed ? "" : renderFolderTree(buildFolderTree(fa.folders, fa.delimiter), 0, expanded, acc.id, unreadMap);
-    const isCurrent = state.currentAccountId === acc.id;
+    const isCurrent = !state.unified && state.currentAccountId === acc.id;
     const color = accColor(acc);
     const caret = collapsed ? "▸" : "▾";
     return `
@@ -896,19 +1137,18 @@ function renderSidebar() {
       </div>`;
   }).join("");
 
-  sb.innerHTML = `
-    <div class="side-actions">
-      <button class="btn-ghost btn" id="sb-compose">✉️ Redactar</button>
-      <button class="btn-ghost btn" id="sb-contacts">👥 Contactos</button>
-      <button class="btn-ghost btn" id="sb-accounts">⚙️ Cuentas y firma</button>
-    </div>
-    ${list}`;
+  if (wrap) wrap.innerHTML = list;
 
-  document.getElementById("sb-compose").onclick = () => { sb.classList.remove("open"); openCompose(); };
-  document.getElementById("sb-contacts").onclick = () => { sb.classList.remove("open"); openContactsManager(); };
-  document.getElementById("sb-accounts").onclick = () => { sb.classList.remove("open"); openAccountsModal(); };
+  const ub = document.getElementById("unified-badge");
+  if (ub) {
+    const total = state.accounts.reduce((n, a) => n + ((state.unreadByAccount[a.id] || {}).total || 0), 0);
+    ub.textContent = total ? (total > 999 ? "999+" : total) : "";
+    ub.style.display = total ? "" : "none";
+  }
 
-  sb.querySelectorAll(".account-head").forEach(el => {
+  if (!wrap) return;
+
+  wrap.querySelectorAll(".account-head").forEach(el => {
     el.onclick = () => {
       const id = parseInt(el.dataset.acc);
       if (state.collapsedAccounts.has(id)) state.collapsedAccounts.delete(id);
@@ -918,28 +1158,29 @@ function renderSidebar() {
     el.ondblclick = async () => {
       const id = parseInt(el.dataset.acc);
       state.collapsedAccounts.delete(id);
-      if (id !== state.currentAccountId) {
-        state.currentAccountId = id;
-        state.currentFolder = "INBOX";
-        state.page = 1;
-        state.q = "";
-        state.unreadOnly = false;
-        const fa = state.foldersByAccount[id] || { folders: [], delimiter: "/" };
-        state.folders = fa.folders;
-        state.folderDelimiter = fa.delimiter;
-        state.expandedFolders = state.expandedByAccount[id] || {};
-        try {
-          await loadMessages();
-          renderSidebar();
-          renderContent();
-        } catch (e) { toast(e.message, "error"); }
-      }
+      state.unified = false;
+      state.currentAccountId = id;
+      state.currentFolder = "INBOX";
+      state.page = 1;
+      state.q = "";
+      state.unreadOnly = false;
+      const fa = state.foldersByAccount[id] || { folders: [], delimiter: "/" };
+      state.folders = fa.folders;
+      state.folderDelimiter = fa.delimiter;
+      state.expandedFolders = state.expandedByAccount[id] || {};
+      try {
+        closeDrawer();
+        await loadMessages();
+        renderSidebar();
+        renderContent();
+      } catch (e) { toast(e.message, "error"); }
     };
   });
-  sb.querySelectorAll('[data-folder]').forEach(el => {
+  wrap.querySelectorAll('[data-folder]').forEach(el => {
     el.onclick = async (e) => {
       e.stopPropagation();
       const accId = parseInt(el.closest("[data-acc]").dataset.acc);
+      state.unified = false;
       if (accId !== state.currentAccountId) {
         state.currentAccountId = accId;
         const fa = state.foldersByAccount[accId] || { folders: [], delimiter: "/" };
@@ -951,7 +1192,7 @@ function renderSidebar() {
       state.page = 1;
       state.q = "";
       state.unreadOnly = false;
-      sb.classList.remove("open");
+      closeDrawer();
       try {
         await loadMessages();
         renderSidebar();
@@ -959,7 +1200,7 @@ function renderSidebar() {
       } catch (e) { toast(e.message, "error"); }
     };
   });
-  sb.querySelectorAll('[data-caret]').forEach(el => {
+  wrap.querySelectorAll('[data-caret]').forEach(el => {
     el.onclick = (e) => {
       e.stopPropagation();
       const accId = parseInt(el.closest("[data-acc]").dataset.acc);
@@ -971,7 +1212,7 @@ function renderSidebar() {
       renderSidebar();
     };
   });
-  bindDropTargets(sb);
+  bindDropTargets(wrap);
 }
 
 function bindDropTargets(sb) {
@@ -1043,43 +1284,54 @@ async function doMoveDrop(destAccId, destFolder) {
 }
 
 function updateHeaderAccount() {
-  const el = document.getElementById("header-account");
-  if (!el) return;
+  const t = document.getElementById("appbar-title");
+  if (!t) return;
+  if (state.unified) {
+    t.textContent = "Bandeja";
+    return;
+  }
   const acc = state.accounts.find(a => a.id === state.currentAccountId);
-  if (!acc) { el.style.display = "none"; return; }
-  el.style.display = "";
-  el.textContent = acc.email;
-  el.style.color = accColor(acc);
-  el.title = "Cuenta activa: " + acc.email;
+  if (!acc) { t.textContent = "HUBMail"; return; }
+  t.textContent = state.currentFolder === "INBOX" ? (acc.display_name || acc.email) : state.currentFolder;
 }
 
 function renderContent() {
   const content = document.getElementById("content");
+  if (!content) return;
   const curAcc = state.accounts.find(a => a.id === state.currentAccountId);
   if (curAcc) content.style.setProperty("--acc-color", accColor(curAcc));
   updateHeaderAccount();
   const totalUnread = state.messages.reduce((n, m) => n + (m.unread ? 1 : 0), 0);
-  document.getElementById("notif-badge").textContent = state.unreadOnly ? "✓" : (totalUnread ? totalUnread : "");
+  const badge = document.getElementById("notif-badge");
+  if (badge) badge.textContent = state.unreadOnly ? "✓" : (totalUnread ? totalUnread : "");
 
   const pages = Math.max(1, Math.ceil(state.total / 25));
   const msgs = messagesHtml();
+  const title = state.unified ? "Bandeja unificada" : esc(state.currentFolder);
 
   content.innerHTML = `
-    <div id="list-pane" style="width:${state.paneWidths.list}px">
-      <div class="list-toolbar">
-        <div class="folder-title">${esc(state.currentFolder)} ${state.unreadOnly ? "(no leídos)" : ""}</div>
-        <div class="last-update">${state.lastSync ? "Actualizado " + esc(state.lastSync) : "Sin sincronizar"}</div>
-        <label class="sel-all" title="Seleccionar todos"><input type="checkbox" id="sel-all"></label>
-        <input id="search-box" placeholder="Buscar..." value="${esc(state.q)}">
-        <button class="btn-ghost btn btn-sm" id="btn-refresh">⟳</button>
-        <button class="btn-ghost btn btn-sm" id="btn-unread">${state.unreadOnly ? "Todo" : "No leídos"}</button>
+    <div id="list-pane">
+      <div class="list-head">
+        <div class="list-title-row">
+          <div class="folder-title">${title} ${state.unreadOnly ? '<span class="chip chip-unread">No leídos</span>' : ""}</div>
+          <div class="last-update">${state.lastSync ? "Actualizado " + esc(state.lastSync) : "Sin sincronizar"}</div>
+        </div>
+        <div class="list-toolbar">
+          <div class="search-wrap">
+            <input id="search-box" placeholder="Buscar..." value="${esc(state.q)}">
+            ${state.q ? `<button class="search-clear" id="btn-search-clear" title="Limpiar">✕</button>` : ""}
+          </div>
+          <button class="btn-ghost btn btn-sm" id="btn-unread" title="${state.unreadOnly ? "Mostrar todos" : "Solo no leídos"}">${state.unreadOnly ? "☑ Todo" : "📬 No leídos"}</button>
+          <button class="btn-ghost btn btn-sm" id="btn-refresh" title="Refrescar">⟳</button>
+        </div>
+        ${state.unified ? "" : `
         <div class="bulk-bar" id="bulk-bar">
           <button class="btn-ghost btn btn-sm" id="btn-sel-all">☑ Todo</button>
           <button class="btn-ghost btn btn-sm" id="btn-read-sel">✓ Leído</button>
           <button class="btn-ghost btn btn-sm" id="btn-unread-sel">◌ No leído</button>
           <button class="btn-danger btn btn-sm" id="btn-del-sel">🗑 Eliminar (<span id="sel-count">0</span>)</button>
           <button class="btn-ghost btn btn-sm" id="btn-clear-sel">Cancelar</button>
-        </div>
+        </div>`}
       </div>
       <div id="message-list">${msgs}</div>
       <div class="pager">
@@ -1088,10 +1340,8 @@ function renderContent() {
         <button class="btn-ghost btn btn-sm" id="btn-next" ${state.page >= pages ? "disabled" : ""}>Siguiente →</button>
       </div>
     </div>
-    <div class="gutter" id="gutter-list" title="Arrastrar para ajustar"></div>
     <div id="detail-pane"></div>`;
 
-  initGutter("gutter-list", "list-pane", "list");
   const searchBox = document.getElementById("search-box");
   let timer;
   searchBox.oninput = () => {
@@ -1102,15 +1352,23 @@ function renderContent() {
       loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
     }, 500);
   };
-  const selAll = document.getElementById("sel-all");
-  selAll.onchange = () => {
-    if (selAll.checked) state.messages.forEach(m => state.selected.add(m.id));
-    else state.messages.forEach(m => state.selected.delete(m.id));
-    renderContent();
-  };
+  const sc = document.getElementById("btn-search-clear");
+  if (sc) sc.onclick = () => { state.q = ""; state.page = 1; loadMessages().then(renderContent).catch(e => toast(e.message, "error")); };
+  if (!state.unified) {
+    const selAll = document.getElementById("sel-all");
+    if (selAll) {
+      selAll.onchange = () => {
+        if (selAll.checked) state.messages.forEach(m => state.selected.add(m.id));
+        else state.messages.forEach(m => state.selected.delete(m.id));
+        renderContent();
+      };
+    }
+  }
   syncSelectAll();
   document.getElementById("btn-refresh").onclick = () => {
-    Promise.all([loadMessages(), loadFolders()]).then(() => { renderContent(); renderSidebar(); }).catch(e => toast(e.message, "error"));
+    const jobs = [loadMessages()];
+    if (!state.unified) jobs.push(loadFolders());
+    Promise.all(jobs).then(() => { renderContent(); renderSidebar(); }).catch(e => toast(e.message, "error"));
   };
   document.getElementById("btn-unread").onclick = () => {
     state.unreadOnly = !state.unreadOnly;
@@ -1121,67 +1379,74 @@ function renderContent() {
   document.getElementById("btn-next").onclick = () => { if (state.page < pages) { state.page++; loadMessages().then(renderContent); } };
 
   bindMessageList();
-  document.getElementById("btn-sel-all").onclick = () => {
-    if (state.selected.size === state.messages.length) state.selected.clear();
-    else state.messages.forEach(m => state.selected.add(m.id));
-    renderContent();
-  };
-  document.getElementById("btn-clear-sel").onclick = () => {
-    state.selected.clear();
-    renderContent();
-  };
-  document.getElementById("btn-del-sel").onclick = async () => {
-    const n = state.selected.size;
-    if (!n) return;
-    if (!confirm(`¿Eliminar ${n} mensaje(s) definitivamente? Esta acción no se puede deshacer.`)) return;
-    showLoading("Eliminando mensajes…");
-    try {
-      await api(`/accounts/${state.currentAccountId}/messages/bulk-delete`, {
-        method: "POST",
-        body: JSON.stringify({ folder: state.currentFolder, ids: [...state.selected] }),
-      });
-      state.selected.clear();
-      await loadMessages();
+  if (!state.unified) {
+    document.getElementById("btn-sel-all").onclick = () => {
+      if (state.selected.size === state.messages.length) state.selected.clear();
+      else state.messages.forEach(m => state.selected.add(m.id));
       renderContent();
-      toast(`${n} mensaje(s) eliminado(s)`, "ok");
-      loadActivity();
-    } catch (e) {
-      toast(e.message, "error");
-    } finally {
-      hideLoading();
-    }
-  };
-  const setBulkSeen = async (seen) => {
-    const n = state.selected.size;
-    if (!n) return;
-    showLoading(seen ? "Marcando como leído…" : "Marcando como no leído…");
-    try {
-      await api(`/accounts/${state.currentAccountId}/messages/bulk-seen`, {
-        method: "POST",
-        body: JSON.stringify({ folder: state.currentFolder, ids: [...state.selected], seen }),
-      });
+    };
+    document.getElementById("btn-clear-sel").onclick = () => {
       state.selected.clear();
-      await loadMessages();
       renderContent();
-      toast(seen ? `${n} mensaje(s) leídos` : `${n} mensaje(s) marcados como no leídos`, "ok");
-      loadActivity();
-    } catch (e) {
-      toast(e.message, "error");
-    } finally {
-      hideLoading();
-    }
-  };
-  document.getElementById("btn-read-sel").onclick = () => setBulkSeen(true);
-  document.getElementById("btn-unread-sel").onclick = () => setBulkSeen(false);
-  updateBulkBar();
+    };
+    document.getElementById("btn-del-sel").onclick = async () => {
+      const n = state.selected.size;
+      if (!n) return;
+      if (!confirm(`¿Eliminar ${n} mensaje(s) definitivamente? Esta acción no se puede deshacer.`)) return;
+      showLoading("Eliminando mensajes…");
+      try {
+        await api(`/accounts/${state.currentAccountId}/messages/bulk-delete`, {
+          method: "POST",
+          body: JSON.stringify({ folder: state.currentFolder, ids: [...state.selected] }),
+        });
+        state.selected.clear();
+        await loadMessages();
+        renderContent();
+        toast(`${n} mensaje(s) eliminado(s)`, "ok");
+        loadActivity();
+      } catch (e) {
+        toast(e.message, "error");
+      } finally {
+        hideLoading();
+      }
+    };
+    const setBulkSeen = async (seen) => {
+      const n = state.selected.size;
+      if (!n) return;
+      showLoading(seen ? "Marcando como leído…" : "Marcando como no leído…");
+      try {
+        await api(`/accounts/${state.currentAccountId}/messages/bulk-seen`, {
+          method: "POST",
+          body: JSON.stringify({ folder: state.currentFolder, ids: [...state.selected], seen }),
+        });
+        state.selected.clear();
+        await loadMessages();
+        renderContent();
+        toast(seen ? `${n} mensaje(s) leídos` : `${n} mensaje(s) marcados como no leídos`, "ok");
+        loadActivity();
+      } catch (e) {
+        toast(e.message, "error");
+      } finally {
+        hideLoading();
+      }
+    };
+    document.getElementById("btn-read-sel").onclick = () => setBulkSeen(true);
+    document.getElementById("btn-unread-sel").onclick = () => setBulkSeen(false);
+    updateBulkBar();
+  }
 
   const dp = document.getElementById("detail-pane");
   if (state.currentMsgId) {
-    loadMessageDetail(state.currentMsgId).then(m => {
+    const m0 = state.messages.find(x => x.id === state.currentMsgId) || state.currentMsg;
+    const ctx = msgCtx(m0);
+    loadMessageDetail(state.currentMsgId, ctx.accountId, ctx.folder).then(m => {
+      m.account_id = ctx.accountId;
+      m.folder = ctx.folder;
       if (document.getElementById("detail-pane")) renderDetail(m);
     }).catch(() => {});
   } else {
     dp.innerHTML = `<div class="empty" style="margin-top:80px">Selecciona un mensaje para leerlo</div>`;
+    dp.classList.remove("open");
   }
 }
 
@@ -1202,15 +1467,21 @@ function syncSelectAll() {
 }
 
 async function openMessage(id) {
+  const m0 = state.messages.find(x => x.id === id) || null;
+  state.currentMsg = m0;
+  const ctx = msgCtx(m0);
   state.currentMsgId = id;
   showLoading("Cargando mensaje…");
   try {
-    const m = await loadMessageDetail(id);
+    const m = await loadMessageDetail(id, ctx.accountId, ctx.folder);
+    m.account_id = ctx.accountId;
+    m.folder = ctx.folder;
     renderDetail(m);
     if (m.unread) {
-      api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(state.currentFolder)}&action=read`, { method: "PATCH" }).catch(() => {});
+      api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(ctx.folder)}&action=read`, { method: "PATCH" }).catch(() => {});
       state.messages.forEach(x => { if (x.id === id) x.unread = false; });
       renderContent();
+      loadUnreadCounts().catch(() => {});
     }
   } catch (e) {
     toast(e.message, "error");
@@ -1220,19 +1491,24 @@ async function openMessage(id) {
 }
 
 async function setMessageSeen(id, seen) {
+  const m0 = state.messages.find(x => x.id === id) || null;
+  const ctx = msgCtx(m0);
   try {
-    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(state.currentFolder)}&action=${seen ? "read" : "unread"}`, { method: "PATCH" });
+    await api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(ctx.folder)}&action=${seen ? "read" : "unread"}`, { method: "PATCH" });
     state.messages.forEach(x => { if (x.id === id) x.unread = !seen; });
-    const el = document.querySelector(`#message-list .msg-item[data-id="${esc(id)}"]`);
+    const el = document.querySelector(`#message-list .msg-card[data-id="${esc(id)}"]`);
     if (el) el.classList.toggle("unread", !seen);
     toast(seen ? "Marcado como leído" : "Marcado como no leído", "ok");
+    loadUnreadCounts().catch(() => {});
   } catch (e) {
     toast(e.message, "error");
   }
 }
 
-async function loadMessageDetail(id) {
-  return api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(state.currentFolder)}`);
+async function loadMessageDetail(id, accountId, folder) {
+  accountId = accountId || state.currentAccountId;
+  folder = folder || state.currentFolder;
+  return api(`/accounts/${accountId}/messages/${encodeURIComponent(id)}?folder=${encodeURIComponent(folder)}`);
 }
 
 function proxyImages(html) {
@@ -1246,6 +1522,7 @@ function detailHtml(m) {
   const sender = from ? `${esc(from.name || "")} &lt;${esc(from.email)}&gt;` : "";
   const to = m.to.map(t => `<span class="chip">${esc(t.name || t.email)}</span>`).join("");
   const cc = m.cc.length ? `<div class="detail-meta">CC: ${m.cc.map(t => esc(t.name || t.email)).join(", ")}</div>` : "";
+  const accTag = m.account_email ? `<span class="acc-tag" style="--acc-color:${accColor({ id: m.account_id })}">${esc(m.account_email)}</span> ` : "";
   const atts = m.attachments.length
     ? `<div class="attachments"><div class="att-title">Adjuntos (${m.attachments.length})</div>${m.attachments.map(a => {
         if (a.cid) return "";
@@ -1280,11 +1557,16 @@ function detailHtml(m) {
       <button class="btn-danger btn btn-sm" id="d-del" title="Eliminar">🗑</button>
     </div>
     <div class="detail-body">
-      <div class="detail-subject">${esc(m.subject)}</div>
-      <div class="detail-from">${sender}</div>
-      <div class="detail-meta">Para: ${to}</div>
-      ${cc}
-      <div class="detail-meta">Fecha: ${esc(m.date)}</div>
+      <div class="detail-head">
+        ${avatarFor(from && (from.name || from.email), from && from.email)}
+        <div class="dh-main">
+          <div class="detail-subject">${esc(m.subject)}</div>
+          <div class="detail-from">${accTag}${sender}</div>
+          <div class="detail-meta">Para: ${to}</div>
+          ${cc}
+          <div class="detail-meta">Fecha: ${esc(m.date)}</div>
+        </div>
+      </div>
       ${atts}
       <iframe class="body-frame" data-hid="${fId}" sandbox="allow-scripts" referrerpolicy="no-referrer" srcdoc="${esc(bodyHtml + autoH || "")}"></iframe>
     </div>`;
@@ -1295,24 +1577,25 @@ function renderDetail(m) {
   dp.innerHTML = detailHtml(m);
   dp.classList.add("open");
   bindDetailActions(m);
-  loadActivity();
+  loadActivity(m.account_id);
 }
 
-async function loadActivity() {
+async function loadActivity(accountId) {
   const bar = document.getElementById("activity-bar");
   if (!bar) return;
   bar.classList.remove("hidden");
+  accountId = accountId || state.currentAccountId;
   try {
     const sel = document.getElementById("activity-filter");
     const uf = sel && sel.value ? `&user_filter=${encodeURIComponent(sel.value)}` : "";
-    const d = await api(`/accounts/${state.currentAccountId}/activity?limit=15${uf}`);
+    const d = await api(`/accounts/${accountId}/activity?limit=15${uf}`);
     const items = d.items || [];
     if (sel) {
       const cur = sel.value;
       sel.innerHTML = '<option value="">Todos los usuarios</option>' +
         (d.users || []).map(u => `<option value="${esc(u)}">${esc(u)}</option>`).join("");
       if (cur && (d.users || []).includes(cur)) sel.value = cur;
-      sel.onchange = () => loadActivity();
+      sel.onchange = () => loadActivity(accountId);
     }
     if (!items.length) {
       bar.querySelector(".activity-list").innerHTML = `<div class="activity-empty">Sin actividad reciente en esta cuenta</div>`;
@@ -1330,6 +1613,7 @@ async function loadActivity() {
 }
 
 function bindDetailActions(m) {
+  const ctx = msgCtx(m);
   const isModal = !!modalRoot.querySelector(".modal");
   const dp = document.getElementById("detail-pane");
   const frame = document.querySelector(".body-frame");
@@ -1354,28 +1638,28 @@ function bindDetailActions(m) {
   };
   document.getElementById("d-del").onclick = async () => {
     if (!confirm("¿Eliminar este mensaje?")) return;
-    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=delete`, { method: "PATCH" }).catch(e => toast(e.message, "error"));
+    await api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(ctx.folder)}&action=delete`, { method: "PATCH" }).catch(e => toast(e.message, "error"));
     state.currentMsgId = null;
     await loadMessages();
     renderContent();
     if (isModal) closeModal();
     toast("Mensaje eliminado", "ok");
-    loadActivity();
+    loadActivity(ctx.accountId);
   };
   document.getElementById("d-flag").onclick = async () => {
-    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=${m.flagged ? "unflag" : "flag"}`, { method: "PATCH" }).catch(() => {});
+    await api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(ctx.folder)}&action=${m.flagged ? "unflag" : "flag"}`, { method: "PATCH" }).catch(() => {});
     m.flagged = !m.flagged;
     document.getElementById("d-flag").textContent = m.flagged ? "★" : "☆";
-    loadActivity();
+    loadActivity(ctx.accountId);
   };
   document.getElementById("d-unread").onclick = async () => {
-    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=unread`, { method: "PATCH" }).catch(() => {});
+    await api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(ctx.folder)}&action=unread`, { method: "PATCH" }).catch(() => {});
     m.unread = true;
     state.messages.forEach(x => { if (x.id === m.id) x.unread = true; });
-    const el = document.querySelector(`#message-list .msg-item[data-id="${esc(m.id)}"]`);
+    const el = document.querySelector(`#message-list .msg-card[data-id="${esc(m.id)}"]`);
     if (el) el.classList.add("unread");
     toast("Marcado como no leído", "ok");
-    loadActivity();
+    loadActivity(ctx.accountId);
   };
   document.getElementById("d-reply").onclick = () => {
     const f = m.from[0];
@@ -1396,11 +1680,11 @@ function bindDetailActions(m) {
   };
   const ns = document.getElementById("d-notspam");
   if (ns) ns.onclick = async () => {
-    await api(`/accounts/${state.currentAccountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(state.currentFolder)}&action=notspam`, { method: "PATCH" }).catch(e => toast(e.message, "error"));
+    await api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(ctx.folder)}&action=notspam`, { method: "PATCH" }).catch(e => toast(e.message, "error"));
     m.spam = false;
     document.getElementById("d-notspam").style.display = "none";
     toast("Marcado como no spam", "ok");
-    loadActivity();
+    loadActivity(ctx.accountId);
   };
 }
 
@@ -1454,10 +1738,14 @@ function printMessage(m) {
 async function openMessageModal(id) {
   const dp = document.getElementById("detail-pane");
   if (dp) dp.classList.remove("open");
+  const m0 = state.messages.find(x => x.id === id) || null;
+  const ctx = msgCtx(m0);
   state.currentMsgId = null;
   showLoading("Cargando mensaje…");
   try {
-    const m = await loadMessageDetail(id);
+    const m = await loadMessageDetail(id, ctx.accountId, ctx.folder);
+    m.account_id = ctx.accountId;
+    m.folder = ctx.folder;
     openModal(detailHtml(m), "modal-email");
     bindDetailActions(m);
   } catch (e) {
@@ -2511,6 +2799,7 @@ function showMailNotification(item) {
 }
 
 async function openAccountInbox(accountId, uid) {
+  state.unified = false;
   if (accountId !== state.currentAccountId || state.currentFolder !== "INBOX") {
     state.currentAccountId = accountId;
     state.currentFolder = "INBOX";
@@ -2521,8 +2810,7 @@ async function openAccountInbox(accountId, uid) {
     state.folders = fa.folders;
     state.folderDelimiter = fa.delimiter;
     state.expandedFolders = state.expandedByAccount[accountId] || {};
-    const sb = document.getElementById("sidebar");
-    if (sb) sb.classList.remove("open");
+    closeDrawer();
     renderSidebar();
     await loadMessages();
     renderContent();
@@ -2532,6 +2820,7 @@ async function openAccountInbox(accountId, uid) {
 
 /* ============================================================ init */
 (async function init() {
+  applyTheme(state.theme);
   applyWallpaper();
   if (!state.token) {
     renderLogin();

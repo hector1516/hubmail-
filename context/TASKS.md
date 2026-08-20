@@ -4,8 +4,8 @@
 - (ninguno)
 
 ## P1 - Importante
-- Commitear y pushear el trabajo pendiente (zoom del detalle, toolbar móvil con iconos, barra de actividad). Ya desplegado; falta commit.
 - Probar notificaciones push reales e2e en navegador (Chrome/Edge): suscribir, enviar correo de prueba a la cuenta, confirmar notificación y clic → abre la app.
+- Revisar en dispositivos reales el comportamiento del nuevo layout app-first (bandeja unificada, drawer, bottom-nav, FAB, swipe, modo oscuro) y ajustar detalles responsive si hace falta.
 
 ## P2 - Normal
 - Verificar comportamiento del zoom (`CSS zoom`) en los navegadores usados por los usuarios; si falla en alguno, migrar a `transform: scale` con ajuste de altura.

@@ -12,12 +12,13 @@
 - Detalle de mensaje: iframe con auto-altura + zoom (DEC-005).
 - Log de actividad como barra inferior global colapsable (DEC-006).
 - Cloudflare Tunnel funcionando: `hubmail.ecc-sa.com.mx` → `http://localhost:8502`.
+- Rediseño UI app-first estilo app móvil (Spark/Outlook) en todas las pantallas: endpoint `GET /api/unified` (bandeja unificada), appbar con menú/búsqueda/notif/tema/cuentas, drawer lateral con acciones y cuentas, bottom-nav (Bandeja/Contactos/Buscar/Ajustes), FAB Redactar, tarjetas de mensaje con avatar y tag de cuenta, swipe táctil (eliminar / leído-no leído), modo oscuro persistido (`data-theme`), tema vía variables CSS con soporte claro/oscuro.
 
 ## EN DESARROLLO
 - (nada actualmente en desarrollo activo)
 
 ## PENDIENTE
-- Commitear y pushear el estado actual (worktree sucio: `static/app.js`, `static/style.css`).
+- Desplegar el rediseño app-first en Docker (rebuild) y verificar en producción.
 - Probar e2e push en navegador real (Chrome/Edge) con un correo de prueba a una cuenta suscrita.
 - Rotar claves/credenciales que quedaron como defaults commiteados (ver SECURITY.md).
 
@@ -25,4 +26,4 @@
 - (nada bloqueado)
 
 ## PRÓXIMO PASO
-- Commit + push del worktree actual (zoom del detalle y mejoras del toolbar móvil). Verificar con `git status` y pushear con el PAT.
+- Rebuild del contenedor con el rediseño app-first y commit + push del worktree (endpoint unificado, nueva UI).

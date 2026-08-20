@@ -1229,6 +1229,85 @@ def list_messages(
     }
 
 
+@app.get("/api/unified")
+def unified_inbox(
+    user=Depends(get_current_user),
+    page: int = Query(default=1, ge=1),
+    q: str = Query(default=""),
+    unread_only: bool = Query(default=False),
+):
+    """Bandeja unificada: INBOX de todas las cuentas del usuario, ordenada por fecha."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT * FROM HUBMAIL_Accounts WHERE UserID=%s ORDER BY IsDefault DESC, EmailAddress",
+            (user["id"],),
+        )
+        user_accounts = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not user_accounts:
+        return {"total": 0, "page": page, "page_size": settings.page_size, "messages": []}
+
+    canonical_ids = set()
+    meta = {}
+    for ua in user_accounts:
+        cid = ua["AccountID"]
+        if ua.get("CanonicalAccountID"):
+            cid = ua["CanonicalAccountID"]
+        canonical_ids.add(cid)
+        meta.setdefault(cid, {
+            "account_id": ua["AccountID"],
+            "email": ua["EmailAddress"],
+            "display_name": ua["DisplayName"],
+        })
+
+    ids = sorted(canonical_ids)
+    if not ids:
+        return {"total": 0, "page": page, "page_size": settings.page_size, "messages": []}
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(as_dict=True)
+        placeholders = ",".join(["%s"] * len(ids))
+        where = f"AccountID IN ({placeholders}) AND Folder='INBOX' AND Spam=0"
+        params = list(ids)
+        if q:
+            like = f"%{q}%"
+            where += " AND (Subject LIKE %s OR FromName LIKE %s OR FromEmail LIKE %s)"
+            params += [like, like, like]
+        if unread_only:
+            where += " AND Seen=0"
+        cur.execute(f"SELECT COUNT(*) AS N FROM HUBMAIL_Messages WHERE {where}", params)
+        total = cur.fetchone()["N"]
+        cur.execute(
+            f"""SELECT AccountID, UID, FromName, FromEmail, ToText, Subject, DateSent,
+                       Seen, Flagged, HasAttachments
+                FROM HUBMAIL_Messages WHERE {where}
+                ORDER BY DateSent DESC
+                LIMIT %s OFFSET %s""",
+            params + [settings.page_size, (page - 1) * settings.page_size],
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    messages = []
+    for r in rows:
+        m = _msg_row_to_dict(r)
+        acc = meta.get(r["AccountID"], {})
+        m["account_id"] = acc.get("account_id") or r["AccountID"]
+        m["account_email"] = acc.get("email") or ""
+        m["account_display"] = acc.get("display_name") or ""
+        messages.append(m)
+    return {
+        "total": total, "page": page, "page_size": settings.page_size,
+        "messages": messages,
+    }
+
+
 @app.get("/api/accounts/{account_id}/messages/{msgid}")
 def get_message(
     account_id: int,
