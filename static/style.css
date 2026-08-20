@@ -162,7 +162,21 @@ input, select, textarea { font-family: inherit; }
 .appbar .icon-btn:hover { background: rgba(255,255,255,.24); }
 .appbar-brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
 .brand-logo { height: 30px; width: 30px; border-radius: 8px; background: #fff; padding: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
-.appbar-title { font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.appbar-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.appbar-title-txt { font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.appbar-acc {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  padding: 3px 11px; border-radius: 14px; font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  color: color-mix(in srgb, var(--acc-color, #2a6fd6) 42%, #fff);
+  background: color-mix(in srgb, var(--acc-color, #2a6fd6) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--acc-color, #2a6fd6) 45%, transparent);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.appbar-acc::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--acc-color, #2a6fd6);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.35);
+}
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 
 /* ---------- drawer ---------- */
@@ -595,7 +609,8 @@ html[data-theme="dark"] .toast { background: #2c3546; }
   .appbar { padding: 0 8px; gap: 4px; }
   .header-right { gap: 2px; }
   .brand-logo { height: 26px; width: 26px; }
-  .appbar-title { font-size: 15px; max-width: 40vw; }
+  .appbar-title-txt { font-size: 15px; max-width: 26vw; }
+  .appbar-acc { max-width: min(170px, 34vw); font-size: 11px; padding: 3px 9px; }
   #notif-stack { width: calc(100vw - 20px); right: 10px; }
   .wm-hero { font-size: 18px; }
   .wm-stat { min-width: 0; flex: 1; }

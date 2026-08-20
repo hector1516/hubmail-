@@ -1015,6 +1015,7 @@ function renderShell() {
     state.page = 1;
     state.q = "";
     state.unreadOnly = false;
+    state.currentMsgId = null;
     closeDrawer();
     loadMessages().then(() => { renderSidebar(); renderContent(); }).catch(e => toast(e.message, "error"));
   };
@@ -1181,6 +1182,7 @@ function renderSidebar() {
       e.stopPropagation();
       const accId = parseInt(el.closest("[data-acc]").dataset.acc);
       state.unified = false;
+      state.currentMsgId = null;
       if (accId !== state.currentAccountId) {
         state.currentAccountId = accId;
         const fa = state.foldersByAccount[accId] || { folders: [], delimiter: "/" };
@@ -1286,13 +1288,23 @@ async function doMoveDrop(destAccId, destFolder) {
 function updateHeaderAccount() {
   const t = document.getElementById("appbar-title");
   if (!t) return;
+  const pill = (label, col) => `<span class="appbar-acc" style="--acc-color:${col}">${esc(label)}</span>`;
   if (state.unified) {
-    t.textContent = "Bandeja";
+    const openMsg = state.currentMsgId ? (state.messages.find(x => x.id === state.currentMsgId) || state.currentMsg) : null;
+    if (openMsg && openMsg.account_id) {
+      const acc = state.accounts.find(a => a.id === openMsg.account_id);
+      const label = openMsg.account_display || (acc && (acc.display_name || acc.email)) || openMsg.account_email || "Cuenta";
+      const col = accColor(acc || { id: openMsg.account_id });
+      t.innerHTML = `<span class="appbar-title-txt">Bandeja</span> ${pill(label, col)}`;
+    } else {
+      t.textContent = "Bandeja";
+    }
     return;
   }
   const acc = state.accounts.find(a => a.id === state.currentAccountId);
   if (!acc) { t.textContent = "HUBMail"; return; }
-  t.textContent = state.currentFolder === "INBOX" ? (acc.display_name || acc.email) : state.currentFolder;
+  const label = state.currentFolder === "INBOX" ? (acc.display_name || acc.email) : state.currentFolder;
+  t.innerHTML = pill(label, accColor(acc));
 }
 
 function renderContent() {
@@ -1628,6 +1640,7 @@ function renderDetail(m) {
   dp.classList.add("open");
   bindDetailActions(m);
   loadActivity(m.account_id);
+  updateHeaderAccount();
 }
 
 async function loadActivity(accountId) {
@@ -1685,6 +1698,7 @@ function bindDetailActions(m) {
       dp.classList.remove("open");
       dp.innerHTML = `<div class="empty" style="margin-top:80px">Selecciona un mensaje para leerlo</div>`;
     }
+    updateHeaderAccount();
   };
   document.getElementById("d-del").onclick = async () => {
     if (!confirm("¿Eliminar este mensaje?")) return;
