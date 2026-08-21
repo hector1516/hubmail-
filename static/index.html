@@ -12,7 +12,7 @@
 <link rel="icon" type="image/png" href="/engrane.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=30">
+<link rel="stylesheet" href="/style.css?v=31">
 </head>
 <body>
 <div id="app"></div>
@@ -21,11 +21,11 @@
 <div id="notif-stack"></div>
 <div id="splash"><img src="/engrane.png" alt="HUBMail" class="spin-logo"></div>
 <div id="loading-overlay" class="hidden"><div class="loader-box"><img src="/engrane.png" alt="Cargando" class="spin-logo small"><span id="loading-text">Cargando…</span></div></div>
-<script src="/app.js?v=30"></script>
+<script src="/app.js?v=31"></script>
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js?v=30").catch(() => {});
+    navigator.serviceWorker.register("/sw.js?v=31").catch(() => {});
   });
 }
 </script>

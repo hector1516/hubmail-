@@ -681,8 +681,13 @@ async function boot() {
     state.expandedFolders = state.expandedByAccount[def.id] || {};
     state.currentFolder = "INBOX";
     state.unified = true;
-    await loadMessages();
     renderShell();
+    Promise.race([
+      loadMessages().then(() => renderContent()),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000)),
+    ]).catch(() => {
+      toast("La carga de mensajes está lenta. Intenta refrescar.", "error");
+    });
     startNotifications();
     startFolderRefresh();
     initPushNotifications();
