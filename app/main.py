@@ -1238,8 +1238,14 @@ def list_messages(
 @app.get("/api/loading-phrases")
 def loading_phrases():
     """Frases aleatorias de carga desde HUB_SplashPhrases."""
-    from .db import get_users_conn
-    conn = get_users_conn()
+    import pymssql
+    conn = pymssql.connect(
+        server=settings.users_db_server,
+        user=settings.users_db_user,
+        password=settings.users_db_password,
+        database=settings.users_db_name,
+        login_timeout=5,
+    )
     try:
         cur = conn.cursor()
         cur.execute(
