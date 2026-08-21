@@ -1084,8 +1084,15 @@ function buildFolderTree(folders, delimiter) {
 
 function renderFolderTree(node, depth, expanded, accId, unreadMap) {
   let html = "";
-  const names = Object.keys(node.children).sort((a, b) =>
-    node.children[a].name.toLowerCase().localeCompare(node.children[b].name.toLowerCase()));
+  const FOLDER_ORDER = { "INBOX": 0, "ENVIADOS": 1, "SENT": 1, "BOURRONES": 2, "DRAFTS": 2, "SPAM": 3, "JUNK": 3, "PAPELERA": 4, "TRASH": 4, "ELIMINADOS": 4 };
+  const names = Object.keys(node.children).sort((a, b) => {
+    const ka = node.children[a].name.toUpperCase();
+    const kb = node.children[b].name.toUpperCase();
+    const pa = ka in FOLDER_ORDER ? FOLDER_ORDER[ka] : 5;
+    const pb = kb in FOLDER_ORDER ? FOLDER_ORDER[kb] : 5;
+    if (pa !== pb) return pa - pb;
+    return node.children[a].name.toLowerCase().localeCompare(node.children[b].name.toLowerCase());
+  });
   for (const n of names) {
     const child = node.children[n];
     const hasKids = Object.keys(child.children).length > 0;
@@ -2722,7 +2729,7 @@ function openFilterForm(filterId, prefill) {
         if (filterId) await api(`/filters/${filterId}`, { method: "PUT", body: JSON.stringify(payload) });
         else await api("/filters", { method: "POST", body: JSON.stringify(payload) });
         toast("Filtro guardado", "ok");
-        openFiltersManager();
+        closeModal();
       } catch (e) { toast(e.message, "error"); }
     };
   }
