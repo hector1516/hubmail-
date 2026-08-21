@@ -28,6 +28,7 @@ const state = {
   collapsedAccounts: new Set(),
   userColors: {},
   paneWidths: { sidebar: 270, list: 380 },
+  splashPhrases: [],
 };
 
 let dragData = null;
@@ -246,8 +247,19 @@ const toastRoot = document.getElementById("toast-root");
 function showLoading(text = "Cargando…") {
   const o = document.getElementById("loading-overlay");
   const t = document.getElementById("loading-text");
+  const p = document.getElementById("loading-phrase");
   if (t) t.textContent = text;
   if (o) o.classList.remove("hidden");
+  if (p) {
+    if (state.splashPhrases.length) {
+      p.textContent = state.splashPhrases[Math.floor(Math.random() * state.splashPhrases.length)];
+      p.style.animation = "none";
+      p.offsetHeight;
+      p.style.animation = "";
+    } else {
+      p.textContent = "";
+    }
+  }
 }
 
 function hideLoading() {
@@ -2934,6 +2946,7 @@ async function openAccountInbox(accountId, uid) {
 (async function init() {
   applyTheme(state.theme);
   applyWallpaper();
+  api("/loading-phrases").then(d => { state.splashPhrases = d.phrases || []; }).catch(() => {});
   if (!state.token) {
     renderLogin();
     hideSplash();

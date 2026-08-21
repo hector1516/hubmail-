@@ -67,6 +67,12 @@ html[data-theme="dark"] {
   box-shadow: var(--shadow); display: flex; flex-direction: column;
   align-items: center; gap: 10px; font-size: 13px; color: var(--text); font-weight: 600;
 }
+.loading-phrase {
+  font-size: 12px; font-weight: 400; color: var(--muted); font-style: italic;
+  max-width: 260px; text-align: center; min-height: 16px;
+  animation: phrase-in .3s ease;
+}
+@keyframes phrase-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 body {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;

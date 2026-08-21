@@ -1235,6 +1235,24 @@ def list_messages(
     }
 
 
+@app.get("/api/loading-phrases")
+def loading_phrases():
+    """Frases aleatorias de carga desde HUB_SplashPhrases."""
+    from .db import get_users_conn
+    conn = get_users_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT TOP 6 Texto FROM HUB_SplashPhrases "
+            "WHERE Activo = 1 AND Texto IS NOT NULL AND Texto != '' "
+            "ORDER BY NEWID()"
+        )
+        phrases = [r[0] for r in cur.fetchall()]
+        return {"phrases": phrases}
+    finally:
+        conn.close()
+
+
 @app.get("/api/unified")
 def unified_inbox(
     user=Depends(get_current_user),
