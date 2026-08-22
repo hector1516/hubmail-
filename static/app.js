@@ -244,25 +244,32 @@ const app = document.getElementById("app");
 const modalRoot = document.getElementById("modal-root");
 const toastRoot = document.getElementById("toast-root");
 
-function showLoading(text = "Cargando…") {
-  const o = document.getElementById("loading-overlay");
-  const t = document.getElementById("loading-text");
+let _phraseInterval = null;
+
+function _rotatePhrase() {
   const p = document.getElementById("loading-phrase");
-  if (t) t.textContent = text;
-  if (o) o.classList.remove("hidden");
-  if (p) {
-    if (state.splashPhrases.length) {
+  if (p && state.splashPhrases.length) {
+    p.style.opacity = "0";
+    setTimeout(() => {
       p.textContent = state.splashPhrases[Math.floor(Math.random() * state.splashPhrases.length)];
-      p.style.animation = "none";
-      p.offsetHeight;
-      p.style.animation = "";
-    } else {
-      p.textContent = "";
-    }
+      p.style.opacity = "1";
+    }, 200);
   }
 }
 
+function showLoading(text = "Cargando…") {
+  const o = document.getElementById("loading-overlay");
+  const t = document.getElementById("loading-text");
+  if (t) t.textContent = text;
+  if (o) o.classList.remove("hidden");
+  _rotatePhrase();
+  clearInterval(_phraseInterval);
+  _phraseInterval = setInterval(_rotatePhrase, 3500);
+}
+
 function hideLoading() {
+  clearInterval(_phraseInterval);
+  _phraseInterval = null;
   const o = document.getElementById("loading-overlay");
   if (o) o.classList.add("hidden");
 }

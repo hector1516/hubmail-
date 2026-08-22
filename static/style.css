@@ -70,7 +70,7 @@ html[data-theme="dark"] {
 .loading-phrase {
   font-size: 12px; font-weight: 400; color: var(--muted); font-style: italic;
   max-width: 260px; text-align: center; min-height: 16px;
-  animation: phrase-in .3s ease;
+  transition: opacity .2s ease;
 }
 @keyframes phrase-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
