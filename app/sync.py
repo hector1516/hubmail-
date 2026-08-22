@@ -1,11 +1,13 @@
 import email
 import email.utils
 import json
+import os
 import threading
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import escape
 
+from .config import settings
 from .crypto import decrypt_secret
 from .db import get_conn
 from .filters import apply_filters, extract_sender_ip, sweep_filters
@@ -202,9 +204,16 @@ def _load_existing(account_id, folder):
         cur = conn.cursor(as_dict=True)
         cur.execute(
             "SELECT m.UID, m.BodyHtml, m.HasAttachments, "
-            "(SELECT COUNT(*) FROM HUBMAIL_Attachments a WHERE a.AccountID=m.AccountID AND a.Folder=m.Folder AND a.UID=m.UID) AS AttCount "
-            "FROM HUBMAIL_Messages m WHERE m.AccountID=%s AND m.Folder=%s",
-            (account_id, folder),
+            "COALESCE(a.AttCount, 0) AS AttCount "
+            "FROM HUBMAIL_Messages m "
+            "LEFT JOIN ("
+            "  SELECT AccountID, Folder, UID, COUNT(*) AS AttCount "
+            "  FROM HUBMAIL_Attachments "
+            "  WHERE AccountID=%s AND Folder=%s "
+            "  GROUP BY AccountID, Folder, UID"
+            ") a ON a.AccountID=m.AccountID AND a.Folder=m.Folder AND a.UID=m.UID "
+            "WHERE m.AccountID=%s AND m.Folder=%s",
+            (account_id, folder, account_id, folder),
         )
         result = {}
         for r in cur.fetchall():
@@ -297,6 +306,10 @@ def _folder_db_count(account_id, folder):
 def _replace_attachments(account_id, folder, uid, items):
     if not items:
         return
+    # Directorio para esta carpeta de mensajes
+    attach_dir = os.path.join(settings.attachments_dir, str(account_id), folder, str(uid))
+    os.makedirs(attach_dir, exist_ok=True)
+
     conn = get_conn()
     try:
         cur = conn.cursor()
@@ -304,15 +317,29 @@ def _replace_attachments(account_id, folder, uid, items):
             "DELETE FROM HUBMAIL_Attachments WHERE AccountID=%s AND Folder=%s AND UID=%s",
             (account_id, folder, uid),
         )
-        cur.executemany(
-            "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-            [
-                (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]), _safe(a["cid"]),
-                 a["size"], a["data"])
-                for a in items
-            ],
-        )
+        rows = []
+        for i, a in enumerate(items):
+            fname = _safe(a["name"]) or f"att_{i}"
+            # Sanitizar nombre de archivo
+            safe_fname = "".join(c if c.isalnum() or c in "._-" else "_" for c in fname)
+            file_path = os.path.join(attach_dir, f"{i}_{safe_fname}")
+            # Guardar archivo en disco
+            try:
+                with open(file_path, "wb") as f:
+                    f.write(a["data"])
+            except Exception as e:
+                print(f"[SYNC] error guardando attachment {file_path}: {e}", flush=True)
+                file_path = ""
+            rows.append(
+                (account_id, folder, uid, _safe(a["name"]), _safe(a["content_type"]),
+                 _safe(a["cid"]), a["size"], file_path)
+            )
+        if rows:
+            cur.executemany(
+                "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, FilePath) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                rows,
+            )
         conn.commit()
     finally:
         conn.close()
@@ -424,30 +451,43 @@ def _insert_many(account_id, folder, items):
                     print(f"[SYNC] fila rechazada uid={row[2]}: {e2}", flush=True)
         conn.commit()
         if att_rows:
-            try:
-                cur.executemany(
-                    "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                    att_rows,
-                )
-                conn.commit()
-            except Exception as e:
-                print(f"[SYNC] attachments batch falló ({e}), reintento por fila", flush=True)
-                conn.rollback()
-                cur = conn.cursor()
-                for row in att_rows:
-                    try:
-                        cur.execute(
-                            "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, Data) "
-                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                            row,
-                        )
-                    except Exception as e2:
-                        print(f"[SYNC] adjunto rechazado uid={row[2]}: {e2}", flush=True)
-                conn.commit()
+            _save_att_rows_to_fs(account_id, folder, att_rows)
         return ok
     finally:
         conn.close()
+
+
+def _save_att_rows_to_fs(account_id, folder, att_rows):
+    """Guarda att_rows (tuplas con datos binarios) en filesystem."""
+    from collections import defaultdict
+    by_uid = defaultdict(list)
+    for row in att_rows:
+        uid = row[2]
+        by_uid[uid].append(row)
+    for uid, rows in by_uid.items():
+        attach_dir = os.path.join(settings.attachments_dir, str(account_id), folder, str(uid))
+        os.makedirs(attach_dir, exist_ok=True)
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            for i, row in enumerate(rows):
+                fname = row[3] or f"att_{i}"
+                safe_fname = "".join(c if c.isalnum() or c in "._-" else "_" for c in fname)
+                file_path = os.path.join(attach_dir, f"{i}_{safe_fname}")
+                try:
+                    with open(file_path, "wb") as f:
+                        f.write(row[7])  # Data
+                except Exception as e:
+                    print(f"[SYNC] error guardando attachment {file_path}: {e}", flush=True)
+                    file_path = ""
+                cur.execute(
+                    "INSERT INTO HUBMAIL_Attachments (AccountID, Folder, UID, Name, ContentType, Cid, Size, FilePath) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (account_id, folder, uid, row[3], row[4], row[5], row[6], file_path),
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
 
 def _update_body_many(account_id, folder, items):

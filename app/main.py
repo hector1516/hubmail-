@@ -1,5 +1,6 @@
 import html
 import json
+import os
 import random
 import re
 import threading
@@ -9,6 +10,8 @@ import urllib.request
 import base64
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+import pymysql
 
 import jwt
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
@@ -167,7 +170,8 @@ def _backfill_user_settings():
 @app.on_event("startup")
 def _start_sync_thread():
     global _sync_thread
-    _backfill_user_settings()
+    # Backfill en hilo separado para no bloquear el startup
+    threading.Thread(target=_backfill_user_settings, daemon=True, name="backfill-settings").start()
     if _sync_thread is None:
         _sync_thread = threading.Thread(target=_background_sync_loop, daemon=True)
         _sync_thread.start()
@@ -272,7 +276,46 @@ def _account_to_dict(acc):
     }
 
 
+_ACCOUNT_CACHE = {}
+_ACCOUNT_CACHE_TTL = 60  # segundos
+_account_cache_lock = threading.Lock()
+
+
+def _account_cache_key(account_id, user_id):
+    return (account_id, user_id)
+
+
+def _account_cache_get(key):
+    with _account_cache_lock:
+        entry = _ACCOUNT_CACHE.get(key)
+        if entry and (time.time() - entry[1]) < _ACCOUNT_CACHE_TTL:
+            return entry[0]
+    return None
+
+
+def _account_cache_set(key, value):
+    with _account_cache_lock:
+        _ACCOUNT_CACHE[key] = (value, time.time())
+        # Limpiar entradas viejas si el cache crece mucho
+        if len(_ACCOUNT_CACHE) > 500:
+            now = time.time()
+            expired = [k for k, (_, ts) in _ACCOUNT_CACHE.items() if (now - ts) > _ACCOUNT_CACHE_TTL]
+            for k in expired[:200]:
+                del _ACCOUNT_CACHE[k]
+
+
+def _account_cache_invalidate(account_id):
+    with _account_cache_lock:
+        expired = [k for k in _ACCOUNT_CACHE if k[0] == account_id]
+        for k in expired:
+            del _ACCOUNT_CACHE[k]
+
+
 def _get_account(user, account_id):
+    key = _account_cache_key(account_id, user["id"])
+    cached = _account_cache_get(key)
+    if cached:
+        return cached
     conn = get_conn()
     try:
         cur = conn.cursor(as_dict=True)
@@ -283,6 +326,7 @@ def _get_account(user, account_id):
         acc = cur.fetchone()
         if not acc:
             raise HTTPException(404, "Cuenta no encontrada")
+        _account_cache_set(key, acc)
         return acc
     finally:
         conn.close()
@@ -728,6 +772,7 @@ def update_account(account_id: int, payload: AccountPayload, user=Depends(get_cu
     finally:
         conn.close()
 
+    _account_cache_invalidate(account_id)
     updated = _get_account(user, account_id)
     return _account_to_dict(updated)
 
@@ -780,6 +825,7 @@ def delete_account(account_id: int, user=Depends(get_current_user)):
         conn.commit()
     finally:
         conn.close()
+    _account_cache_invalidate(account_id)
     return {"ok": True}
 
 
@@ -1139,18 +1185,26 @@ def _db_get_attachments(account_id, folder, uid):
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT Name, ContentType, Cid, Size, Data FROM HUBMAIL_Attachments "
+            "SELECT Name, ContentType, Cid, Size, FilePath FROM HUBMAIL_Attachments "
             "WHERE AccountID=%s AND Folder=%s AND UID=%s ORDER BY AttachID",
             (account_id, folder, uid),
         )
         out = []
         for r in cur.fetchall():
+            data = ""
+            file_path = r.get("FilePath") or ""
+            if file_path and os.path.isfile(file_path):
+                try:
+                    with open(file_path, "rb") as f:
+                        data = base64.b64encode(f.read()).decode()
+                except Exception:
+                    data = ""
             out.append({
                 "name": r["Name"] or "adjunto",
                 "content_type": r["ContentType"] or "application/octet-stream",
                 "cid": r["Cid"] or "",
                 "size": r["Size"] or 0,
-                "data": base64.b64encode(r["Data"]).decode() if r["Data"] else "",
+                "data": data,
             })
         return out
     finally:
