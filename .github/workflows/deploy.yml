@@ -7,6 +7,9 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+    defaults:
+      run:
+        shell: cmd
     steps:
       - uses: actions/checkout@v4
 
