@@ -6,26 +6,29 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
         run: docker build -t eccsa/hubmail:latest .
 
-      - name: Save image as tar
-        run: docker save eccsa/hubmail:latest | gzip > hubmail.tar.gz
+      - name: Stop old container
+        run: docker rm -f hubmail
+        continue-on-error: true
 
-      - name: Upload to server and restart
-        env:
-          SSH_PASS: ${{ secrets.SSH_PASSWORD }}
-        run: |
-          sudo apt-get install -y sshpass
-          # Upload image
-          sshpass -p "$SSH_PASS" scp -o StrictHostKeyChecking=no hubmail.tar.gz eccsa@172.26.90.159:"C:/Users/eccsa/hubmail/hubmail.tar.gz"
-          # Upload modified files
-          sshpass -p "$SSH_PASS" scp -o StrictHostKeyChecking=no -r app/* eccsa@172.26.90.159:"C:/Users/eccsa/hubmail/app/"
-          sshpass -p "$SSH_PASS" scp -o StrictHostKeyChecking=no -r migrations_mysql/* eccsa@172.26.90.159:"C:/Users/eccsa/hubmail/migrations_mysql/"
-          sshpass -p "$SSH_PASS" scp -o StrictHostKeyChecking=no Dockerfile apply_migrations.py requirements.txt eccsa@172.26.90.159:"C:/Users/eccsa/hubmail/"
-          # Load image and restart
-          sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no eccsa@172.26.90.159 "cd C:\Users\eccsa\hubmail && docker load -i hubmail.tar.gz && docker rm -f hubmail && docker run -d --name hubmail --restart unless-stopped -p 8502:8502 -v hubmail_data:/data -e HUBMAIL_DB_NAME=HUBMAIL -e HUBMAIL_DB_SERVER=172.17.0.1 -e HUBMAIL_DB_USER=hubmail -e HUBMAIL_DB_PASSWORD=eyccazo -e HUBMAIL_USERS_DB_NAME=ECCSA_Admon_Pruebas -e HUBMAIL_USERS_DB_SERVER=172.26.117.220 -e HUBMAIL_DEEPL_KEY=4588b06b-6615-455a-ab62-2062d7bf6119:fx eccsa/hubmail:latest && del hubmail.tar.gz"
+      - name: Start new container
+        run: >
+          docker run -d --name hubmail --restart unless-stopped
+          -p 8502:8502 -v hubmail_data:/data
+          -e HUBMAIL_DB_NAME=HUBMAIL
+          -e HUBMAIL_DB_SERVER=172.17.0.1
+          -e HUBMAIL_DB_USER=hubmail
+          -e HUBMAIL_DB_PASSWORD=eyccazo
+          -e HUBMAIL_USERS_DB_NAME=ECCSA_Admon_Pruebas
+          -e HUBMAIL_USERS_DB_SERVER=172.26.117.220
+          -e HUBMAIL_DEEPL_KEY=4588b06b-6615-455a-ab62-2062d7bf6119:fx
+          eccsa/hubmail:latest
+
+      - name: Show logs
+        run: docker logs --tail 10 hubmail
