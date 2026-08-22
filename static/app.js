@@ -2947,6 +2947,10 @@ async function openAccountInbox(accountId, uid) {
   applyTheme(state.theme);
   applyWallpaper();
   try { const d = await api("/loading-phrases"); state.splashPhrases = d.phrases || []; } catch(_){}
+  if (state.splashPhrases.length) {
+    const sp = document.getElementById("splash-phrase");
+    if (sp) sp.textContent = state.splashPhrases[Math.floor(Math.random() * state.splashPhrases.length)];
+  }
   if (!state.token) {
     renderLogin();
     hideSplash();
