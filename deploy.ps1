@@ -70,6 +70,7 @@ Upload-File "$localRoot\migrations_mysql\0006_push_subscriptions.sql" "$RemoteDi
 Upload-File "$localRoot\migrations_mysql\0007_sync_errors.sql" "$RemoteDir\migrations_mysql\0007_sync_errors.sql"
 Upload-File "$localRoot\migrations_mysql\0008_filtered_at.sql" "$RemoteDir\migrations_mysql\0008_filtered_at.sql"
 Upload-File "$localRoot\migrations_mysql\0009_translation_stats.sql" "$RemoteDir\migrations_mysql\0009_translation_stats.sql"
+Upload-File "$localRoot\migrations_mysql\0010_attachments_file_path.sql" "$RemoteDir\migrations_mysql\0010_attachments_file_path.sql"
 Upload-File "$localRoot\requirements.txt" "$RemoteDir\requirements.txt"
 Upload-File "$localRoot\Dockerfile" "$RemoteDir\Dockerfile"
 Upload-File "$localRoot\apply_migrations.py" "$RemoteDir\apply_migrations.py"
