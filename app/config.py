@@ -39,7 +39,7 @@ def get_settings() -> Settings:
         users_db_password=os.getenv("HUBMAIL_USERS_DB_PASSWORD", "eyccazo"),
         users_db_name=os.getenv("HUBMAIL_USERS_DB_NAME", "ECCSA_Admon"),
         jwt_secret=os.getenv("HUBMAIL_JWT_SECRET", "cambia-este-secreto-hubmail"),
-        jwt_expire_minutes=int(os.getenv("HUBMAIL_JWT_EXPIRE", "480")),
+        jwt_expire_minutes=int(os.getenv("HUBMAIL_JWT_EXPIRE", "5256000")),
         max_attachment_mb=int(os.getenv("HUBMAIL_MAX_ATTACH_MB", "25")),
         page_size=int(os.getenv("HUBMAIL_PAGE_SIZE", "25")),
         key_file=os.getenv("HUBMAIL_KEY_FILE", "/data/.hubmail_key"),
