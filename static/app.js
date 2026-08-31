@@ -28,6 +28,8 @@ const state = {
   collapsedAccounts: new Set(),
   userColors: {},
   paneWidths: { sidebar: 270, list: 380 },
+  hasMore: true,
+  loadingMore: false,
   splashPhrases: [],
 };
 
@@ -826,10 +828,10 @@ function autoExpand(folders, delimiter) {
   return expanded;
 }
 
-async function loadMessages() {
-  showLoading("Cargando correos…");
+async function loadMessages(append = false) {
+  if (!append) showLoading("Cargando correos…");
   try {
-    state.selected.clear();
+    if (!append) state.selected.clear();
     let data;
     if (state.unified) {
       data = await api(`/unified?page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`);
@@ -838,9 +840,14 @@ async function loadMessages() {
       const qs = `?folder=${encodeURIComponent(state.currentFolder)}&page=${state.page}&q=${encodeURIComponent(state.q)}&unread_only=${state.unreadOnly}`;
       data = await api(`/accounts/${state.currentAccountId}/messages${qs}`);
     }
-    state.messages = data.messages;
+    if (append) {
+      state.messages = [...state.messages, ...data.messages];
+    } else {
+      state.messages = data.messages;
+    }
     state.total = data.total;
     state.lastSync = data.last_sync || null;
+    state.hasMore = data.messages.length >= 25;
   } finally {
     hideLoading();
   }
@@ -971,8 +978,11 @@ function silentRefresh() {
       bindMessageList();
       const lu = document.querySelector(".last-update");
       if (lu) lu.textContent = state.lastSync ? "Actualizado " + state.lastSync : "Sin sincronizar";
-      const pager = document.querySelector(".pager");
-      if (pager) { pager.innerHTML = pagerHtml(); bindPager(); }
+      const loadMore = document.getElementById("load-more");
+      if (loadMore) {
+        loadMore.textContent = state.hasMore ? "Cargando más…" : "— Fin de la lista —";
+        loadMore.classList.toggle("end", !state.hasMore);
+      }
       const badge = document.getElementById("notif-badge");
       if (badge) badge.textContent = state.unreadOnly ? "✓" : (state.messages.reduce((n, m) => n + (m.unread ? 1 : 0), 0) || "");
       syncSelectAll();
@@ -999,21 +1009,33 @@ window.addEventListener("message", e => {
 
 function renderShell() {
   const uname = state.user ? (state.user.name || state.user.email || "?") : "?";
+  const isAdmin = state.user && state.user.is_admin;
   app.innerHTML = `
     <div class="shell">
       <header class="appbar">
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
         <div class="brand appbar-brand"><img src="/engrane.png" class="brand-logo" alt="HUBMail"><span class="appbar-title" id="appbar-title">Bandeja</span></div>
+        <div class="appbar-actions">
+          <button class="appbar-btn" id="ab-unified" title="Bandeja unificada">📥 <span>Bandeja</span><span class="badge" id="unified-badge"></span></button>
+          <button class="appbar-btn" id="ab-compose" title="Redactar">✉️ <span>Redactar</span></button>
+          <button class="appbar-btn" id="ab-contacts" title="Contactos">👥 <span>Contactos</span></button>
+          <button class="appbar-btn" id="ab-filters" title="Filtros">📁 <span>Filtros</span></button>
+          ${isAdmin ? `
+            <button class="appbar-btn" id="ab-sync" title="Estado de sincronización">🔄 <span>Sync</span></button>
+            <button class="appbar-btn" id="ab-errors" title="Errores de sincronización">⚠️ <span>Errores</span></button>
+            <button class="appbar-btn" id="ab-activity" title="Log de actividad">📋 <span>Actividad</span></button>
+          ` : ""}
+        </div>
         <div class="header-right">
           <button class="icon-btn" id="btn-search" title="Buscar">🔍</button>
           <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
           <button class="icon-btn" id="btn-theme" title="Cambiar tema">${state.theme === "dark" ? "☀️" : "🌙"}</button>
           <button class="icon-btn" id="btn-accounts" title="Cuentas y ajustes">⚙️</button>
+          <button class="icon-btn" id="btn-logout" title="Cerrar sesión">⏻</button>
         </div>
       </header>
 
       <div class="app-body">
-        <div class="drawer-overlay" id="drawer-overlay"></div>
         <aside class="sidebar" id="sidebar">
           <div class="sidebar-header">
             <div class="sidebar-user">
@@ -1023,34 +1045,12 @@ function renderShell() {
                 <div class="sidebar-email">${esc(state.user && state.user.email || "")}</div>
               </div>
             </div>
-            <button class="icon-btn sidebar-toggle" id="sidebar-toggle" title="Colapsar/expandir">◀</button>
           </div>
-          <div class="sidebar-actions">
-            <button class="sidebar-action" id="da-unified">📥 Bandeja unificada<span class="acc-unread" id="unified-badge"></span></button>
-            <button class="sidebar-action" id="da-compose">✉️ Redactar</button>
-            <button class="sidebar-action" id="da-contacts">👥 Contactos</button>
-            <button class="sidebar-action" id="da-accounts">⚙️ Cuentas y firma</button>
-            <button class="sidebar-action" id="da-filters">📁 Filtros</button>
-            ${state.user && state.user.is_admin ? `
-              <button class="sidebar-action" id="da-sync">📊 Estado de sincronización</button>
-              <button class="sidebar-action" id="da-errors">⚠️ Errores de sincronización</button>
-              <button class="sidebar-action" id="da-activity">📋 Log de actividad</button>` : ""}
-            <button class="sidebar-action" id="da-theme">${state.theme === "dark" ? "☀️ Tema claro" : "🌙 Tema oscuro"}</button>
-            <button class="sidebar-action" id="da-logout">⏻ Cerrar sesión</button>
-          </div>
-          <div class="sec-title">Mis cuentas</div>
+          <div class="sec-title">Carpetas</div>
           <div class="sidebar-accounts" id="sidebar-accounts"></div>
         </aside>
         <main id="content"></main>
       </div>
-
-      <nav class="bottom-nav">
-        <button class="bn-item" data-go="inbox"><span class="bn-ico">📥</span><span class="bn-label">Bandeja</span></button>
-        <button class="bn-item" data-go="contacts"><span class="bn-ico">👥</span><span class="bn-label">Contactos</span></button>
-        <button class="bn-item" data-go="search"><span class="bn-ico">🔍</span><span class="bn-label">Buscar</span></button>
-        <button class="bn-item" data-go="activity"><span class="bn-ico">📋</span><span class="bn-label">Actividad</span></button>
-        <button class="bn-item" data-go="accounts"><span class="bn-ico">⚙️</span><span class="bn-label">Ajustes</span></button>
-      </nav>
 
       <button class="fab" id="fab" title="Redactar">✏️</button>
     </div>`;
@@ -1062,46 +1062,55 @@ function renderShell() {
     state.q = "";
     state.unreadOnly = false;
     state.currentMsgId = null;
+    state.hasMore = true;
+    state.loadingMore = false;
     closeSidebar();
     loadMessages().then(() => { renderSidebar(); renderContent(); }).catch(e => toast(e.message, "error"));
   };
 
+  function setupInfiniteScroll() {
+    const list = document.getElementById("message-list");
+    const loadMore = document.getElementById("load-more");
+    if (!list || !loadMore) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && state.hasMore && !state.loadingMore) {
+        state.loadingMore = true;
+        loadMore.textContent = "Cargando más…";
+        state.page++;
+        loadMessages(true).then(() => {
+          list.innerHTML = messagesHtml();
+          bindMessageList();
+          state.loadingMore = false;
+          loadMore.textContent = state.hasMore ? "Cargando más…" : "— Fin de la lista —";
+        }).catch(() => {
+          state.loadingMore = false;
+          loadMore.textContent = "Error al cargar";
+        });
+      }
+    }, { rootMargin: "200px", threshold: 0 });
+    observer.observe(loadMore);
+  }
+
   document.getElementById("btn-menu").onclick = openSidebar;
   document.getElementById("drawer-overlay").onclick = closeSidebar;
-  document.getElementById("sidebar-toggle").onclick = toggleSidebar;
   document.getElementById("fab").onclick = openCompose;
   document.getElementById("btn-search").onclick = focusSearch;
   document.getElementById("btn-accounts").onclick = () => openAccountsModal();
   document.getElementById("btn-theme").onclick = toggleTheme;
-  document.getElementById("da-unified").onclick = goUnified;
-  document.getElementById("da-compose").onclick = () => { closeSidebar(); openCompose(); };
-  document.getElementById("da-contacts").onclick = () => { closeSidebar(); openContactsManager(); };
-  document.getElementById("da-accounts").onclick = () => { closeSidebar(); openAccountsModal(); };
-  document.getElementById("da-filters").onclick = () => { closeSidebar(); openFiltersManager(); };
-  document.getElementById("da-theme").onclick = () => { toggleTheme(); };
-  document.getElementById("da-logout").onclick = logout;
-  document.getElementById("btn-welcome").onclick = () => { closeSidebar(); openWelcome(); };
+  document.getElementById("btn-logout").onclick = logout;
+  document.getElementById("ab-unified").onclick = goUnified;
+  document.getElementById("ab-compose").onclick = openCompose;
+  document.getElementById("ab-contacts").onclick = openContactsManager;
+  document.getElementById("ab-filters").onclick = openFiltersManager;
+  document.getElementById("ab-sync")?.onclick = () => openAdminSyncStatus();
+  document.getElementById("ab-errors")?.onclick = () => openAdminErrors();
+  document.getElementById("ab-activity")?.onclick = () => openAdminActivity();
+  document.getElementById("btn-welcome").onclick = () => openWelcome();
   document.getElementById("btn-notif").onclick = () => {
     state.unreadOnly = !state.unreadOnly;
     state.page = 1;
     loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
   };
-  const btnActivity = document.getElementById("da-activity");
-  if (btnActivity) btnActivity.onclick = () => { closeSidebar(); openAdminActivity(); };
-  const btnSyncStatus = document.getElementById("da-sync");
-  if (btnSyncStatus) btnSyncStatus.onclick = () => { closeSidebar(); openAdminSyncStatus(); };
-  const btnErrors = document.getElementById("da-errors");
-  if (btnErrors) btnErrors.onclick = () => { closeSidebar(); openAdminErrors(); };
-  document.querySelectorAll(".bottom-nav .bn-item").forEach(btn => {
-    btn.onclick = () => {
-      const go = btn.dataset.go;
-      if (go === "inbox") goUnified();
-      else if (go === "contacts") openContactsManager();
-      else if (go === "search") focusSearch();
-      else if (go === "activity") openAdminActivity();
-      else if (go === "accounts") openAccountsModal();
-    };
-  });
   renderSidebar();
   renderContent();
   applyTheme(state.theme);
@@ -1212,6 +1221,8 @@ function renderSidebar() {
       state.page = 1;
       state.q = "";
       state.unreadOnly = false;
+      state.hasMore = true;
+      state.loadingMore = false;
       const fa = state.foldersByAccount[id] || { folders: [], delimiter: "/" };
       state.folders = fa.folders;
       state.folderDelimiter = fa.delimiter;
@@ -1241,6 +1252,8 @@ function renderSidebar() {
       state.page = 1;
       state.q = "";
       state.unreadOnly = false;
+      state.hasMore = true;
+      state.loadingMore = false;
       closeDrawer();
       try {
         await loadMessages();
@@ -1443,11 +1456,7 @@ function renderContent() {
         </div>`}
       </div>
       <div id="message-list">${msgs}</div>
-      <div class="pager">
-        <button class="btn-ghost btn btn-sm" id="btn-prev" ${state.page <= 1 ? "disabled" : ""}>← Anterior</button>
-        <span>Página ${state.page} de ${pages} · ${state.total} mensajes</span>
-        <button class="btn-ghost btn btn-sm" id="btn-next" ${state.page >= pages ? "disabled" : ""}>Siguiente →</button>
-      </div>
+      ${state.hasMore ? `<div class="load-more" id="load-more">Cargando más…</div>` : `<div class="load-more end">— Fin de la lista —</div>`}
     </div>
     <div id="detail-pane"></div>`;
 
@@ -1475,6 +1484,7 @@ function renderContent() {
   }
   syncSelectAll();
   document.getElementById("btn-refresh").onclick = () => {
+    state.page = 1;
     const jobs = [loadMessages()];
     if (!state.unified) jobs.push(loadFolders());
     Promise.all(jobs).then(() => { renderContent(); renderSidebar(); }).catch(e => toast(e.message, "error"));
@@ -1484,10 +1494,9 @@ function renderContent() {
     state.page = 1;
     loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
   };
-  document.getElementById("btn-prev").onclick = () => { if (state.page > 1) { state.page--; loadMessages().then(renderContent); } };
-  document.getElementById("btn-next").onclick = () => { if (state.page < pages) { state.page++; loadMessages().then(renderContent); } };
 
   bindMessageList();
+  setupInfiniteScroll();
   if (!state.unified) {
     document.getElementById("btn-sel-all").onclick = () => {
       if (state.selected.size === state.messages.length) state.selected.clear();
