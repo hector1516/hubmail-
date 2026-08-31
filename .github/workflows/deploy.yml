@@ -20,19 +20,10 @@ jobs:
           port: 22
           script_stop: true
           script: |
-            set -e
-            cd C:\Users\eccsa\hubmail
-            
-            echo === Actualizando codigo ===
+            cd /d C:\Users\eccsa\hubmail
             git fetch origin main
             git reset --hard origin/main
-            
-            echo === Construyendo imagen Docker ===
             docker build -t eccsa/hubmail:latest .
-            
-            echo === Reiniciando contenedor ===
             docker rm -f hubmail
             docker run -d --name hubmail --restart unless-stopped -p 8502:8502 -v hubmail_data:/data -e HUBMAIL_DB_NAME=HUBMAIL -e HUBMAIL_DB_SERVER=172.17.0.1 -e HUBMAIL_DB_USER=hubmail -e HUBMAIL_DB_PASSWORD=eyccazo -e HUBMAIL_USERS_DB_NAME=ECCSA_Admon_Pruebas -e HUBMAIL_USERS_DB_SERVER=172.26.117.220 eccsa/hubmail:latest
-            
-            echo === Despliegue completado ===
             docker logs --tail 10 hubmail
