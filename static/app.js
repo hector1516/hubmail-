@@ -227,7 +227,6 @@ async function quickCardAction(el, action) {
     }
     el.remove();
     loadUnreadCounts().catch(() => {});
-    loadActivity();
   } catch (e) {
     toast(e.message, "error");
   }
@@ -1045,19 +1044,11 @@ function renderShell() {
         <main id="content"></main>
       </div>
 
-      <div class="activity-bar hidden" id="activity-bar">
-        <div class="activity-bar-head">
-          <button class="icon-btn btn-sm" id="activity-toggle" title="Mostrar/ocultar log">📋</button>
-          <span class="activity-title">Actividad de la cuenta</span>
-          <select class="activity-filter" id="activity-filter"><option value="">Todos los usuarios</option></select>
-        </div>
-        <div class="activity-list">Cargando…</div>
-      </div>
-
       <nav class="bottom-nav">
         <button class="bn-item" data-go="inbox"><span class="bn-ico">📥</span><span class="bn-label">Bandeja</span></button>
         <button class="bn-item" data-go="contacts"><span class="bn-ico">👥</span><span class="bn-label">Contactos</span></button>
         <button class="bn-item" data-go="search"><span class="bn-ico">🔍</span><span class="bn-label">Buscar</span></button>
+        <button class="bn-item" data-go="activity"><span class="bn-ico">📋</span><span class="bn-label">Actividad</span></button>
         <button class="bn-item" data-go="accounts"><span class="bn-ico">⚙️</span><span class="bn-label">Ajustes</span></button>
       </nav>
 
@@ -1107,19 +1098,13 @@ function renderShell() {
       if (go === "inbox") goUnified();
       else if (go === "contacts") openContactsManager();
       else if (go === "search") focusSearch();
+      else if (go === "activity") openAdminActivity();
       else if (go === "accounts") openAccountsModal();
     };
   });
   renderSidebar();
   renderContent();
   applyTheme(state.theme);
-  document.getElementById("activity-toggle").onclick = () => {
-    const bar = document.getElementById("activity-bar");
-    bar.classList.toggle("collapsed");
-    const list = bar.querySelector(".activity-list");
-    if (list) list.style.display = bar.classList.contains("collapsed") ? "none" : "";
-  };
-  loadActivity();
 }
 
 function buildFolderTree(folders, delimiter) {
@@ -1387,7 +1372,6 @@ async function doMoveDrop(destAccId, destFolder) {
     );
     await loadMessages();
     await loadUnreadCounts();
-    loadActivity();
     renderSidebar();
     renderContent();
   } catch (e) {
@@ -1528,7 +1512,6 @@ function renderContent() {
         await loadMessages();
         renderContent();
         toast(`${n} mensaje(s) eliminado(s)`, "ok");
-        loadActivity();
       } catch (e) {
         toast(e.message, "error");
       } finally {
@@ -1548,7 +1531,6 @@ function renderContent() {
         await loadMessages();
         renderContent();
         toast(seen ? `${n} mensaje(s) leídos` : `${n} mensaje(s) marcados como no leídos`, "ok");
-        loadActivity();
       } catch (e) {
         toast(e.message, "error");
       } finally {
@@ -1763,40 +1745,7 @@ function renderDetail(m) {
   dp.innerHTML = detailHtml(m);
   dp.classList.add("open");
   bindDetailActions(m);
-  loadActivity(m.account_id);
   updateHeaderAccount();
-}
-
-async function loadActivity(accountId) {
-  const bar = document.getElementById("activity-bar");
-  if (!bar) return;
-  bar.classList.remove("hidden");
-  accountId = accountId || state.currentAccountId;
-  try {
-    const sel = document.getElementById("activity-filter");
-    const uf = sel && sel.value ? `&user_filter=${encodeURIComponent(sel.value)}` : "";
-    const d = await api(`/accounts/${accountId}/activity?limit=15${uf}`);
-    const items = d.items || [];
-    if (sel) {
-      const cur = sel.value;
-      sel.innerHTML = '<option value="">Todos los usuarios</option>' +
-        (d.users || []).map(u => `<option value="${esc(u)}">${esc(u)}</option>`).join("");
-      if (cur && (d.users || []).includes(cur)) sel.value = cur;
-      sel.onchange = () => loadActivity(accountId);
-    }
-    if (!items.length) {
-      bar.querySelector(".activity-list").innerHTML = `<div class="activity-empty">Sin actividad reciente en esta cuenta</div>`;
-      return;
-    }
-    bar.querySelector(".activity-list").innerHTML = items.map(a =>
-      `<div class="activity-item">
-        <span class="activity-user">${esc(a.user)}</span>
-        <span class="activity-text">${esc(a.details)}</span>
-        <span class="activity-time">${fmtDt(a.created_at)}</span>
-      </div>`).join("");
-  } catch (e) {
-    bar.classList.add("hidden");
-  }
 }
 
 function bindDetailActions(m) {
@@ -1832,13 +1781,11 @@ function bindDetailActions(m) {
     renderContent();
     if (isModal) closeModal();
     toast("Mensaje eliminado", "ok");
-    loadActivity(ctx.accountId);
   };
   document.getElementById("d-flag").onclick = async () => {
     await api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(ctx.folder)}&action=${m.flagged ? "unflag" : "flag"}`, { method: "PATCH" }).catch(() => {});
     m.flagged = !m.flagged;
     document.getElementById("d-flag").textContent = m.flagged ? "★" : "☆";
-    loadActivity(ctx.accountId);
   };
   document.getElementById("d-unread").onclick = async () => {
     await api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(ctx.folder)}&action=unread`, { method: "PATCH" }).catch(() => {});
@@ -1847,7 +1794,6 @@ function bindDetailActions(m) {
     const el = document.querySelector(`#message-list .msg-card[data-id="${esc(m.id)}"]`);
     if (el) el.classList.add("unread");
     toast("Marcado como no leído", "ok");
-    loadActivity(ctx.accountId);
   };
   document.getElementById("d-reply").onclick = () => {
     const f = m.from[0];
@@ -1876,7 +1822,6 @@ function bindDetailActions(m) {
     m.spam = false;
     document.getElementById("d-notspam").style.display = "none";
     toast("Marcado como no spam", "ok");
-    loadActivity(ctx.accountId);
   };
 }
 
@@ -2146,7 +2091,6 @@ async function sendMessage() {
     });
     closeModal();
     toast(res && res.queued_sent ? "Correo enviado (se guardará en Enviados)" : "Correo enviado", "ok");
-    loadActivity();
   } catch (e) {
     toast(e.message, "error");
     btn.disabled = false;
