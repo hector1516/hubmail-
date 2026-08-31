@@ -189,7 +189,8 @@ input, select, textarea { font-family: inherit; }
 .app-body { flex: 1; display: flex; overflow: hidden; min-height: 0; position: relative; }
 .sidebar {
   position: fixed; top: 0; bottom: 0; left: 0; z-index: 40; width: 340px;
-  background: var(--card); box-shadow: 6px 0 28px rgba(0,0,0,.18);
+  background: var(--card); border-right: 1px solid var(--border);
+  box-shadow: 6px 0 28px rgba(0,0,0,.18);
   display: flex; flex-direction: column; overflow: hidden;
   transition: width .25s ease, transform .25s ease;
 }
@@ -201,7 +202,8 @@ input, select, textarea { font-family: inherit; }
 .drawer-overlay.show { opacity: 1; pointer-events: auto; }
 .sidebar-header {
   display: flex; align-items: center; gap: 11px; padding: 16px;
-  background: var(--appbar); color: #fff; flex-shrink: 0;
+  background: var(--card-2); color: var(--text); flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
 }
 .sidebar-user { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0; }
 .sidebar-user-info { flex: 1; min-width: 0; }
@@ -640,9 +642,12 @@ html[data-theme="dark"] .toast { background: #2c3546; }
   .sidebar.collapsed .acc-caret,
   .sidebar.collapsed .folders,
   .sidebar.collapsed .account-head small { display: none; }
-  .sidebar.collapsed .sidebar-action { justify-content: center; padding: 10px; }
+.sidebar.collapsed .sidebar-action { justify-content: center; padding: 10px; }
   .sidebar.collapsed .account-head { justify-content: center; padding: 8px; }
   .sidebar.collapsed .account-head .acc-dot { margin: 0; }
+  .sidebar-toggle { display: none; }
+  .sidebar-header { padding: 12px 16px; }
+  .drawer-overlay { background: rgba(8, 14, 26, .6); }
   main { margin-left: 0; }
   #list-pane { width: 100%; min-width: 0; flex: 1; }
   #detail-pane {
@@ -664,6 +669,9 @@ html[data-theme="dark"] .toast { background: #2c3546; }
   .fab { bottom: calc(var(--nav-h) + 14px + env(safe-area-inset-bottom, 0px)); right: 14px; }
 }
 
+@media (min-width: 1025px) {
+  #btn-menu { display: none; }
+}
 @media (max-width: 600px) {
   .appbar { padding: 0 8px; gap: 4px; }
   .header-right { gap: 2px; }
@@ -678,6 +686,7 @@ html[data-theme="dark"] .toast { background: #2c3546; }
   .bulk-bar .btn { flex: 1; }
   .detail-toolbar { padding: 8px; gap: 6px; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .detail-toolbar::-webkit-scrollbar { display: none; }
+}
   .detail-toolbar .btn { flex: none; min-width: 44px; min-height: 44px; font-size: 18px; }
   .detail-toolbar .btn-label { display: none; }
   .detail-zoom { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
