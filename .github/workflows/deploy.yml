@@ -1,37 +1,38 @@
-name: Deploy to Server
+name: Deploy HUBMail
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
   deploy:
-    runs-on: self-hosted
-    defaults:
-      run:
-        shell: cmd
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t eccsa/hubmail:latest .
-
-      - name: Stop old container
-        run: docker rm -f hubmail
-        continue-on-error: true
-
-      - name: Start new container
-        run: >
-          docker run -d --name hubmail --restart unless-stopped
-          -p 8502:8502 -v hubmail_data:/data
-          -e HUBMAIL_DB_NAME=HUBMAIL
-          -e HUBMAIL_DB_SERVER=172.17.0.1
-          -e HUBMAIL_DB_USER=hubmail
-          -e HUBMAIL_DB_PASSWORD=eyccazo
-          -e HUBMAIL_USERS_DB_NAME=ECCSA_Admon_Pruebas
-          -e HUBMAIL_USERS_DB_SERVER=172.26.117.220
-          -e HUBMAIL_DEEPL_KEY=4588b06b-6615-455a-ab62-2062d7bf6119:fx
-          eccsa/hubmail:latest
-
-      - name: Show logs
-        run: docker logs --tail 10 hubmail
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -e
+            cd C:\Users\eccsa\hubmail
+            
+            echo === Actualizando codigo ===
+            git fetch origin main
+            git reset --hard origin/main
+            
+            echo === Construyendo imagen Docker ===
+            docker build -t eccsa/hubmail:latest .
+            
+            echo === Reiniciando contenedor ===
+            docker rm -f hubmail
+            docker run -d --name hubmail --restart unless-stopped -p 8502:8502 -v hubmail_data:/data -e HUBMAIL_DB_NAME=HUBMAIL -e HUBMAIL_DB_SERVER=172.17.0.1 -e HUBMAIL_DB_USER=hubmail -e HUBMAIL_DB_PASSWORD=eyccazo -e HUBMAIL_USERS_DB_NAME=ECCSA_Admon_Pruebas -e HUBMAIL_USERS_DB_SERVER=172.26.117.220 eccsa/hubmail:latest
+            
+            echo === Despliegue completado ===
+            docker logs --tail 10 hubmail
