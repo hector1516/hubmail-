@@ -110,17 +110,37 @@ function msgCtx(m) {
 }
 
 function openDrawer() {
-  const d = document.getElementById("drawer");
+  const d = document.getElementById("sidebar");
   if (d) d.classList.add("open");
   const o = document.getElementById("drawer-overlay");
   if (o) o.classList.add("show");
 }
 
 function closeDrawer() {
-  const d = document.getElementById("drawer");
+  const d = document.getElementById("sidebar");
   if (d) d.classList.remove("open");
   const o = document.getElementById("drawer-overlay");
   if (o) o.classList.remove("show");
+}
+
+function openSidebar() {
+  openDrawer();
+}
+
+function closeSidebar() {
+  closeDrawer();
+}
+
+function toggleSidebar() {
+  const d = document.getElementById("sidebar");
+  const btn = document.getElementById("sidebar-toggle");
+  if (d && d.classList.contains("collapsed")) {
+    d.classList.remove("collapsed");
+    if (btn) btn.textContent = "◀";
+  } else {
+    d.classList.add("collapsed");
+    if (btn) btn.textContent = "▶";
+  }
 }
 
 function focusSearch() {
@@ -856,7 +876,7 @@ function messagesHtml() {
               <span class="mc-date">${esc(cardDate(m.date))}</span>
             </div>
             <div class="mc-subject">${esc(m.subject)}</div>
-            <div class="mc-row2">${accTag}${icons}</div>
+            <div class="mc-row2">${accTag}${icons}<button class="move-btn" data-id="${esc(m.id)}" data-acc="${ctx.accountId}" data-folder="${esc(ctx.folder)}" title="Mover a carpeta">📁</button></div>
           </div>
         </div>
       </div>`;
@@ -898,6 +918,15 @@ function bindMessageList() {
       dragData = null;
     });
     attachSwipe(el, () => quickCardAction(el, "delete"), () => quickCardAction(el, "toggle"));
+  });
+  document.querySelectorAll(".move-btn").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const accId = parseInt(btn.dataset.acc, 10);
+      const folder = btn.dataset.folder;
+      showMoveMenu(btn, id, accId, folder);
+    };
   });
   document.querySelectorAll(".msg-check").forEach(cb => {
     cb.onclick = (e) => {
@@ -986,30 +1015,32 @@ function renderShell() {
 
       <div class="app-body">
         <div class="drawer-overlay" id="drawer-overlay"></div>
-        <aside class="drawer" id="drawer">
-          <div class="drawer-head">
-            ${avatarFor(state.user && state.user.name, state.user && state.user.email)}
-            <div class="drawer-user">
-              <div class="drawer-name" id="btn-welcome" title="Ver mi resumen">${esc(uname)}</div>
-              <div class="drawer-email">${esc(state.user && state.user.email || "")}</div>
+        <aside class="sidebar" id="sidebar">
+          <div class="sidebar-header">
+            <div class="sidebar-user">
+              ${avatarFor(state.user && state.user.name, state.user && state.user.email)}
+              <div class="sidebar-user-info">
+                <div class="sidebar-name" id="btn-welcome" title="Ver mi resumen">${esc(uname)}</div>
+                <div class="sidebar-email">${esc(state.user && state.user.email || "")}</div>
+              </div>
             </div>
-            <button class="icon-btn" id="drawer-close" title="Cerrar">✕</button>
+            <button class="icon-btn sidebar-toggle" id="sidebar-toggle" title="Colapsar/expandir">◀</button>
           </div>
-          <div class="drawer-actions">
-            <button class="drawer-action" id="da-unified">📥 Bandeja unificada<span class="acc-unread" id="unified-badge"></span></button>
-            <button class="drawer-action" id="da-compose">✉️ Redactar</button>
-            <button class="drawer-action" id="da-contacts">👥 Contactos</button>
-            <button class="drawer-action" id="da-accounts">⚙️ Cuentas y firma</button>
-            <button class="drawer-action" id="da-filters">📁 Filtros</button>
+          <div class="sidebar-actions">
+            <button class="sidebar-action" id="da-unified">📥 Bandeja unificada<span class="acc-unread" id="unified-badge"></span></button>
+            <button class="sidebar-action" id="da-compose">✉️ Redactar</button>
+            <button class="sidebar-action" id="da-contacts">👥 Contactos</button>
+            <button class="sidebar-action" id="da-accounts">⚙️ Cuentas y firma</button>
+            <button class="sidebar-action" id="da-filters">📁 Filtros</button>
             ${state.user && state.user.is_admin ? `
-              <button class="drawer-action" id="da-sync">📊 Estado de sincronización</button>
-              <button class="drawer-action" id="da-errors">⚠️ Errores de sincronización</button>
-              <button class="drawer-action" id="da-activity">📋 Log de actividad</button>` : ""}
-            <button class="drawer-action" id="da-theme">${state.theme === "dark" ? "☀️ Tema claro" : "🌙 Tema oscuro"}</button>
-            <button class="drawer-action" id="da-logout">⏻ Cerrar sesión</button>
+              <button class="sidebar-action" id="da-sync">📊 Estado de sincronización</button>
+              <button class="sidebar-action" id="da-errors">⚠️ Errores de sincronización</button>
+              <button class="sidebar-action" id="da-activity">📋 Log de actividad</button>` : ""}
+            <button class="sidebar-action" id="da-theme">${state.theme === "dark" ? "☀️ Tema claro" : "🌙 Tema oscuro"}</button>
+            <button class="sidebar-action" id="da-logout">⏻ Cerrar sesión</button>
           </div>
           <div class="sec-title">Mis cuentas</div>
-          <div class="drawer-accounts" id="drawer-accounts"></div>
+          <div class="sidebar-accounts" id="sidebar-accounts"></div>
         </aside>
         <main id="content"></main>
       </div>
@@ -1040,36 +1071,36 @@ function renderShell() {
     state.q = "";
     state.unreadOnly = false;
     state.currentMsgId = null;
-    closeDrawer();
+    closeSidebar();
     loadMessages().then(() => { renderSidebar(); renderContent(); }).catch(e => toast(e.message, "error"));
   };
 
-  document.getElementById("btn-menu").onclick = openDrawer;
-  document.getElementById("drawer-overlay").onclick = closeDrawer;
-  document.getElementById("drawer-close").onclick = closeDrawer;
+  document.getElementById("btn-menu").onclick = openSidebar;
+  document.getElementById("drawer-overlay").onclick = closeSidebar;
+  document.getElementById("sidebar-toggle").onclick = toggleSidebar;
   document.getElementById("fab").onclick = openCompose;
   document.getElementById("btn-search").onclick = focusSearch;
   document.getElementById("btn-accounts").onclick = () => openAccountsModal();
   document.getElementById("btn-theme").onclick = toggleTheme;
   document.getElementById("da-unified").onclick = goUnified;
-  document.getElementById("da-compose").onclick = () => { closeDrawer(); openCompose(); };
-  document.getElementById("da-contacts").onclick = () => { closeDrawer(); openContactsManager(); };
-  document.getElementById("da-accounts").onclick = () => { closeDrawer(); openAccountsModal(); };
-  document.getElementById("da-filters").onclick = () => { closeDrawer(); openFiltersManager(); };
+  document.getElementById("da-compose").onclick = () => { closeSidebar(); openCompose(); };
+  document.getElementById("da-contacts").onclick = () => { closeSidebar(); openContactsManager(); };
+  document.getElementById("da-accounts").onclick = () => { closeSidebar(); openAccountsModal(); };
+  document.getElementById("da-filters").onclick = () => { closeSidebar(); openFiltersManager(); };
   document.getElementById("da-theme").onclick = () => { toggleTheme(); };
   document.getElementById("da-logout").onclick = logout;
-  document.getElementById("btn-welcome").onclick = () => { closeDrawer(); openWelcome(); };
+  document.getElementById("btn-welcome").onclick = () => { closeSidebar(); openWelcome(); };
   document.getElementById("btn-notif").onclick = () => {
     state.unreadOnly = !state.unreadOnly;
     state.page = 1;
     loadMessages().then(renderContent).catch(e => toast(e.message, "error"));
   };
   const btnActivity = document.getElementById("da-activity");
-  if (btnActivity) btnActivity.onclick = () => { closeDrawer(); openAdminActivity(); };
+  if (btnActivity) btnActivity.onclick = () => { closeSidebar(); openAdminActivity(); };
   const btnSyncStatus = document.getElementById("da-sync");
-  if (btnSyncStatus) btnSyncStatus.onclick = () => { closeDrawer(); openAdminSyncStatus(); };
+  if (btnSyncStatus) btnSyncStatus.onclick = () => { closeSidebar(); openAdminSyncStatus(); };
   const btnErrors = document.getElementById("da-errors");
-  if (btnErrors) btnErrors.onclick = () => { closeDrawer(); openAdminErrors(); };
+  if (btnErrors) btnErrors.onclick = () => { closeSidebar(); openAdminErrors(); };
   document.querySelectorAll(".bottom-nav .bn-item").forEach(btn => {
     btn.onclick = () => {
       const go = btn.dataset.go;
@@ -1144,7 +1175,7 @@ function renderFolderTree(node, depth, expanded, accId, unreadMap) {
 }
 
 function renderSidebar() {
-  const wrap = document.getElementById("drawer-accounts");
+  const wrap = document.getElementById("sidebar-accounts");
   const list = state.accounts.map(acc => {
     const fa = state.foldersByAccount[acc.id] || { folders: [], delimiter: "/" };
     const expanded = state.expandedByAccount[acc.id] || {};
@@ -1275,6 +1306,56 @@ function bindDropTargets(sb) {
   });
 }
 
+function showMoveMenu(btn, msgId, srcAccId, srcFolder, isBulk = false) {
+  const existing = document.getElementById("move-menu");
+  if (existing) existing.remove();
+
+  const accounts = state.accounts;
+  let html = '<div class="move-menu-header">Mover a carpeta</div>';
+  accounts.forEach(acc => {
+    const fa = state.foldersByAccount[acc.id] || { folders: [], delimiter: "/" };
+    const folders = fa.folders.filter(f => f.name !== srcFolder || acc.id !== srcAccId);
+    if (!folders.length) return;
+    const color = accColor(acc);
+    html += `<div class="move-menu-account" style="--acc-color:${color}">
+      <div class="move-menu-account-name">${esc(acc.display_name || acc.email)}</div>
+      <div class="move-menu-folders">`;
+    folders.forEach(f => {
+      html += `<button class="move-menu-folder" data-acc="${acc.id}" data-folder="${esc(f.name)}" data-msgid="${esc(msgId)}" data-srcacc="${srcAccId}" data-srcfolder="${esc(srcFolder)}">${esc(f.name)}</button>`;
+    });
+    html += '</div></div>';
+  });
+
+  const menu = document.createElement("div");
+  menu.id = "move-menu";
+  menu.className = "move-menu";
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+
+  const rect = btn.getBoundingClientRect();
+  menu.style.top = (rect.bottom + window.scrollY + 4) + "px";
+  const leftPos = isBulk ? (rect.left + window.scrollX - 240) : (rect.left + window.scrollX - 200);
+  menu.style.left = leftPos + "px";
+
+  menu.querySelectorAll(".move-menu-folder").forEach(el => {
+    el.onclick = async (e) => {
+      const destAccId = parseInt(el.dataset.acc);
+      const destFolder = el.dataset.folder;
+      const uids = state.selected.has(msgId) ? Array.from(state.selected) : [msgId];
+      menu.remove();
+      await doMoveDrop(destAccId, destFolder);
+    };
+  });
+
+  const closeMenu = (e) => {
+    if (!menu.contains(e.target) && e.target !== btn) {
+      menu.remove();
+      document.removeEventListener("click", closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", closeMenu), 0);
+}
+
 async function doMoveDrop(destAccId, destFolder) {
   if (!dragData) return;
   destAccId = parseInt(destAccId);
@@ -1372,6 +1453,7 @@ function renderContent() {
           <button class="btn-ghost btn btn-sm" id="btn-sel-all">☑ Todo</button>
           <button class="btn-ghost btn btn-sm" id="btn-read-sel">✓ Leído</button>
           <button class="btn-ghost btn btn-sm" id="btn-unread-sel">◌ No leído</button>
+          <button class="btn-ghost btn btn-sm" id="btn-move-sel">📁 Mover (<span id="sel-count-move">0</span>)</button>
           <button class="btn-danger btn btn-sm" id="btn-del-sel">🗑 Eliminar (<span id="sel-count">0</span>)</button>
           <button class="btn-ghost btn btn-sm" id="btn-clear-sel">Cancelar</button>
         </div>`}
@@ -1475,6 +1557,14 @@ function renderContent() {
     };
     document.getElementById("btn-read-sel").onclick = () => setBulkSeen(true);
     document.getElementById("btn-unread-sel").onclick = () => setBulkSeen(false);
+    document.getElementById("btn-move-sel").onclick = () => {
+      if (!state.selected.size) return;
+      const firstMsg = state.messages.find(m => state.selected.has(m.id));
+      if (firstMsg) {
+        const ctx = msgCtx(firstMsg);
+        showMoveMenu(document.getElementById("btn-move-sel"), [...state.selected][0], ctx.accountId, ctx.folder, true);
+      }
+    };
     updateBulkBar();
   }
 
@@ -1496,8 +1586,10 @@ function renderContent() {
 function updateBulkBar() {
   const bar = document.getElementById("bulk-bar");
   const count = document.getElementById("sel-count");
+  const countMove = document.getElementById("sel-count-move");
   if (bar) bar.style.display = state.selected.size ? "flex" : "none";
   if (count) count.textContent = state.selected.size;
+  if (countMove) countMove.textContent = state.selected.size;
 }
 
 function syncSelectAll() {
@@ -1596,6 +1688,7 @@ function detailHtml(m) {
         <button class="btn-ghost btn btn-sm" id="d-zoomin" title="Acercar">+</button>
       </span>
       <span class="spacer"></span>
+      <button class="btn-ghost btn btn-sm" id="d-move" title="Mover a carpeta">📁<span class="btn-label">Mover</span></button>
       <button class="btn-ghost btn btn-sm" id="d-filter" title="Crear filtro a partir de este mensaje">⛭<span class="btn-label">Crear filtro</span></button>
       <button class="btn-danger btn btn-sm" id="d-del" title="Eliminar">🗑</button>
     </div>
@@ -1775,6 +1868,8 @@ function bindDetailActions(m) {
       conditions: [{ field: "from", op: "contains", value: email || "" }],
     });
   };
+  const dm = document.getElementById("d-move");
+  if (dm) dm.onclick = () => showMoveMenu(dm, m.id, ctx.accountId, ctx.folder);
   const ns = document.getElementById("d-notspam");
   if (ns) ns.onclick = async () => {
     await api(`/accounts/${ctx.accountId}/messages/${encodeURIComponent(m.id)}?folder=${encodeURIComponent(ctx.folder)}&action=notspam`, { method: "PATCH" }).catch(e => toast(e.message, "error"));
