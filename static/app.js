@@ -1,3 +1,4 @@
+const BUILD_TIME = Date.now();
 const state = {
   token: localStorage.getItem("hubmail_token"),
   user: null,
