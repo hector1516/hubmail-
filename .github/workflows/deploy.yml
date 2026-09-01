@@ -10,11 +10,11 @@ jobs:
     steps:
       - name: Actualizar codigo
         run: git pull origin main
-        working-directory: C:\Users\eccsa\hubmail
+        working-directory: C:\Users\eccsa\HUBMail_build
 
       - name: Build imagen Docker
         run: docker build -t eccsa/hubmail:latest .
-        working-directory: C:\Users\eccsa\hubmail
+        working-directory: C:\Users\eccsa\HUBMail_build
 
       - name: Reiniciar contenedor
         run: |
