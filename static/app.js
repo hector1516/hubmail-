@@ -1092,7 +1092,8 @@ function renderShell() {
   }
 
   document.getElementById("btn-menu").onclick = openSidebar;
-  document.getElementById("drawer-overlay").onclick = closeSidebar;
+  const drawerOverlay = document.getElementById("drawer-overlay");
+  if (drawerOverlay) drawerOverlay.onclick = closeSidebar;
   document.getElementById("fab").onclick = openCompose;
   document.getElementById("btn-search").onclick = focusSearch;
   document.getElementById("btn-accounts").onclick = () => openAccountsModal();
