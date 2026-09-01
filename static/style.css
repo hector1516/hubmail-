@@ -159,13 +159,9 @@ input, select, textarea { font-family: inherit; }
 
 /* ---------- shell / appbar ---------- */
 .shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; --header-h: 54px; --nav-h: 58px; }
-.appbar {
-  background: var(--appbar); color: #fff; display: flex; align-items: center; gap: 8px;
-  padding: 0 12px; height: calc(var(--header-h) + env(safe-area-inset-top, 0px));
-  padding-top: env(safe-area-inset-top, 0px); flex-shrink: 0; z-index: 20; position: relative;
+.appbar-mobile {
+  display: none;
 }
-.appbar .icon-btn { background: rgba(255,255,255,.14); color: #fff; }
-.appbar .icon-btn:hover { background: rgba(255,255,255,.24); }
 .appbar-brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
 .brand-logo { height: 30px; width: 30px; border-radius: 8px; background: #fff; padding: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
 .appbar-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
@@ -616,13 +612,21 @@ html[data-theme="dark"] .toast { background: #2c3546; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1024px) {
+  .appbar-mobile {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--appbar); color: #fff;
+    padding: 0 12px; height: var(--header-h);
+    flex-shrink: 0; z-index: 20; position: relative;
+  }
+  .appbar-mobile .icon-btn { background: rgba(255,255,255,.14); color: #fff; }
+  .appbar-mobile .icon-btn:hover { background: rgba(255,255,255,.24); }
   .sidebar {
     transform: translateX(-105%);
     width: min(340px, 88vw);
     box-shadow: 6px 0 28px rgba(0,0,0,.18);
+    top: var(--header-h);
   }
   .sidebar.open { transform: none; }
-  .sidebar-toggle { display: none; }
   .sidebar-header { padding: 12px 16px; }
   .drawer-overlay { background: rgba(8, 14, 26, .6); }
   main { margin-left: 0; }
@@ -647,15 +651,11 @@ html[data-theme="dark"] .toast { background: #2c3546; }
 }
 @media (min-width: 1025px) {
   .fab { display: none; }
-  #btn-menu { display: none; }
-}
-
-@media (min-width: 1025px) {
-  #btn-menu { display: none; }
+  .sidebar { top: 0; }
 }
 
 @media (max-width: 600px) {
-  .appbar { padding: 0 8px; gap: 4px; }
+  .appbar-mobile { padding: 0 8px; gap: 4px; }
   .header-right { gap: 2px; }
   .brand-logo { height: 26px; width: 26px; }
   .appbar-title-txt { font-size: 15px; max-width: 26vw; }

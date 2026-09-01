@@ -1012,12 +1012,9 @@ function renderShell() {
   const isAdmin = state.user && state.user.is_admin;
   app.innerHTML = `
     <div class="shell">
-      <header class="appbar">
+      <header class="appbar-mobile">
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
         <div class="brand appbar-brand"><img src="/engrane.png" class="brand-logo" alt="HUBMail"><span class="appbar-title" id="appbar-title">Bandeja</span></div>
-        <div class="header-right">
-          <button class="icon-btn" id="btn-theme" title="Cambiar tema">${state.theme === "dark" ? "☀️" : "🌙"}</button>
-        </div>
       </header>
 
       <div class="app-body">
@@ -1048,8 +1045,14 @@ function renderShell() {
                 <button class="sb-icon" id="ab-sync" title="Estado de sincronización">🔄</button>
                 <button class="sb-icon" id="ab-errors" title="Errores de sincronización">⚠️</button>
                 <button class="sb-icon" id="ab-activity" title="Log de actividad">📋</button>
+                <button class="sb-icon" id="btn-theme" title="Cambiar tema">${state.theme === "dark" ? "☀️" : "🌙"}</button>
               </div>
-            ` : ""}
+            ` : `
+              <div class="sb-divider"></div>
+              <div class="sb-actions-row">
+                <button class="sb-icon" id="btn-theme" title="Cambiar tema">${state.theme === "dark" ? "☀️" : "🌙"}</button>
+              </div>
+            `}
             <div class="sb-divider"></div>
           </div>
           <div class="sec-title">Carpetas</div>
@@ -1060,8 +1063,6 @@ function renderShell() {
         </aside>
         <main id="content"></main>
       </div>
-
-      <button class="fab" id="fab" title="Redactar">✏️</button>
     </div>`;
 
   const goUnified = () => {
@@ -1077,33 +1078,9 @@ function renderShell() {
     loadMessages().then(() => { renderSidebar(); renderContent(); }).catch(e => toast(e.message, "error"));
   };
 
-  function setupInfiniteScroll() {
-    const list = document.getElementById("message-list");
-    const loadMore = document.getElementById("load-more");
-    if (!list || !loadMore) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && state.hasMore && !state.loadingMore) {
-        state.loadingMore = true;
-        loadMore.textContent = "Cargando más…";
-        state.page++;
-        loadMessages(true).then(() => {
-          list.innerHTML = messagesHtml();
-          bindMessageList();
-          state.loadingMore = false;
-          loadMore.textContent = state.hasMore ? "Cargando más…" : "— Fin de la lista —";
-        }).catch(() => {
-          state.loadingMore = false;
-          loadMore.textContent = "Error al cargar";
-        });
-      }
-    }, { rootMargin: "200px", threshold: 0 });
-    observer.observe(loadMore);
-  }
-
   document.getElementById("btn-menu").onclick = openSidebar;
   const drawerOverlay = document.getElementById("drawer-overlay");
   if (drawerOverlay) drawerOverlay.onclick = closeSidebar;
-  document.getElementById("fab").onclick = openCompose;
   document.getElementById("btn-search").onclick = focusSearch;
   document.getElementById("btn-accounts").onclick = () => openAccountsModal();
   document.getElementById("btn-theme").onclick = toggleTheme;
@@ -1427,6 +1404,29 @@ function updateHeaderAccount() {
   if (!acc) { t.textContent = "HUBMail"; return; }
   const label = state.currentFolder === "INBOX" ? (acc.display_name || acc.email) : state.currentFolder;
   t.innerHTML = pill(label, accColor(acc));
+}
+
+function setupInfiniteScroll() {
+  const list = document.getElementById("message-list");
+  const loadMore = document.getElementById("load-more");
+  if (!list || !loadMore) return;
+  const observer = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting && state.hasMore && !state.loadingMore) {
+      state.loadingMore = true;
+      loadMore.textContent = "Cargando más…";
+      state.page++;
+      loadMessages(true).then(() => {
+        list.innerHTML = messagesHtml();
+        bindMessageList();
+        state.loadingMore = false;
+        loadMore.textContent = state.hasMore ? "Cargando más…" : "— Fin de la lista —";
+      }).catch(() => {
+        state.loadingMore = false;
+        loadMore.textContent = "Error al cargar";
+      });
+    }
+  }, { rootMargin: "200px", threshold: 0 });
+  observer.observe(loadMore);
 }
 
 function renderContent() {
