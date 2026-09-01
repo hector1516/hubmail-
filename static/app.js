@@ -1,4 +1,3 @@
-const BUILD_TIME = Date.now();
 const state = {
   token: localStorage.getItem("hubmail_token"),
   user: null,
@@ -1103,9 +1102,12 @@ function renderShell() {
   document.getElementById("ab-compose").onclick = openCompose;
   document.getElementById("ab-contacts").onclick = openContactsManager;
   document.getElementById("ab-filters").onclick = openFiltersManager;
-  document.getElementById("ab-sync")?.onclick = () => openAdminSyncStatus();
-  document.getElementById("ab-errors")?.onclick = () => openAdminErrors();
-  document.getElementById("ab-activity")?.onclick = () => openAdminActivity();
+  const elSync = document.getElementById("ab-sync");
+  if (elSync) elSync.onclick = () => openAdminSyncStatus();
+  const elErr = document.getElementById("ab-errors");
+  if (elErr) elErr.onclick = () => openAdminErrors();
+  const elAct = document.getElementById("ab-activity");
+  if (elAct) elAct.onclick = () => openAdminActivity();
   document.getElementById("btn-welcome").onclick = () => openWelcome();
   document.getElementById("btn-notif").onclick = () => {
     state.unreadOnly = !state.unreadOnly;
