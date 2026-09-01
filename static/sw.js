@@ -1,4 +1,4 @@
-const CACHE = "hubmail-v3";
+const CACHE = "hubmail-v4";
 const SHELL = [
   "/",
   "/index.html",

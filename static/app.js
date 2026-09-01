@@ -1015,23 +1015,8 @@ function renderShell() {
       <header class="appbar">
         <button class="icon-btn" id="btn-menu" title="Menú">☰</button>
         <div class="brand appbar-brand"><img src="/engrane.png" class="brand-logo" alt="HUBMail"><span class="appbar-title" id="appbar-title">Bandeja</span></div>
-        <div class="appbar-actions">
-          <button class="appbar-btn" id="ab-unified" title="Bandeja unificada">📥 <span>Bandeja</span><span class="badge" id="unified-badge"></span></button>
-          <button class="appbar-btn" id="ab-compose" title="Redactar">✉️ <span>Redactar</span></button>
-          <button class="appbar-btn" id="ab-contacts" title="Contactos">👥 <span>Contactos</span></button>
-          <button class="appbar-btn" id="ab-filters" title="Filtros">📁 <span>Filtros</span></button>
-          ${isAdmin ? `
-            <button class="appbar-btn" id="ab-sync" title="Estado de sincronización">🔄 <span>Sync</span></button>
-            <button class="appbar-btn" id="ab-errors" title="Errores de sincronización">⚠️ <span>Errores</span></button>
-            <button class="appbar-btn" id="ab-activity" title="Log de actividad">📋 <span>Actividad</span></button>
-          ` : ""}
-        </div>
         <div class="header-right">
-          <button class="icon-btn" id="btn-search" title="Buscar">🔍</button>
-          <button class="icon-btn" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
           <button class="icon-btn" id="btn-theme" title="Cambiar tema">${state.theme === "dark" ? "☀️" : "🌙"}</button>
-          <button class="icon-btn" id="btn-accounts" title="Cuentas y ajustes">⚙️</button>
-          <button class="icon-btn" id="btn-logout" title="Cerrar sesión">⏻</button>
         </div>
       </header>
 
@@ -1046,8 +1031,32 @@ function renderShell() {
               </div>
             </div>
           </div>
+          <div class="sidebar-actions">
+            <button class="sb-btn sb-btn-primary" id="ab-unified" title="Bandeja unificada">📥 Bandeja<span class="badge" id="unified-badge"></span></button>
+            <button class="sb-btn sb-btn-primary" id="ab-compose" title="Redactar">✉️ Redactar</button>
+            <div class="sb-actions-row">
+              <button class="sb-icon" id="btn-search" title="Buscar">🔍</button>
+              <button class="sb-icon" id="btn-notif" title="No leídos">📬<span class="badge" id="notif-badge"></span></button>
+              <button class="sb-icon" id="ab-contacts" title="Contactos">👥</button>
+              <button class="sb-icon" id="ab-filters" title="Filtros">📁</button>
+              <button class="sb-icon" id="btn-accounts" title="Cuentas y ajustes">⚙️</button>
+            </div>
+            ${isAdmin ? `
+              <div class="sb-divider"></div>
+              <div class="sb-section-label">Administración</div>
+              <div class="sb-actions-row">
+                <button class="sb-icon" id="ab-sync" title="Estado de sincronización">🔄</button>
+                <button class="sb-icon" id="ab-errors" title="Errores de sincronización">⚠️</button>
+                <button class="sb-icon" id="ab-activity" title="Log de actividad">📋</button>
+              </div>
+            ` : ""}
+            <div class="sb-divider"></div>
+          </div>
           <div class="sec-title">Carpetas</div>
           <div class="sidebar-accounts" id="sidebar-accounts"></div>
+          <div class="sidebar-footer">
+            <button class="sb-footer-btn" id="btn-logout" title="Cerrar sesión">⏻ Salir</button>
+          </div>
         </aside>
         <main id="content"></main>
       </div>
