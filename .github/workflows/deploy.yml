@@ -8,9 +8,6 @@ jobs:
   deploy:
     runs-on: [self-hosted, windows]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Actualizar codigo
         run: git pull origin main
         working-directory: C:\Users\eccsa\hubmail
@@ -26,4 +23,3 @@ jobs:
 
       - name: Verificar contenedor
         run: docker logs --tail 10 hubmail
-
