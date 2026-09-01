@@ -2998,6 +2998,15 @@ async function openAccountInbox(accountId, uid) {
 }
 
 /* ============================================================ init */
+// Error handlers para debugging en pantalla
+window.addEventListener("error", (e) => {
+  const s = document.getElementById("splash");
+  if (s) s.innerHTML = '<div style="color:#e04b3a;padding:20px;font-family:monospace;font-size:12px;max-width:600px;margin:auto;text-align:left"><b>Error JS:</b><br>' + (e.message || e.error?.message || "desconocido") + '<br><br>Archivo: ' + (e.filename || "?") + ':' + (e.lineno || "?") + '</div>';
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const s = document.getElementById("splash");
+  if (s) s.innerHTML = '<div style="color:#e04b3a;padding:20px;font-family:monospace;font-size:12px;max-width:600px;margin:auto;text-align:left"><b>Error promesa:</b><br>' + (e.reason?.message || e.reason || "desconocido") + '</div>';
+});
 (async function init() {
   applyTheme(state.theme);
   applyWallpaper();
